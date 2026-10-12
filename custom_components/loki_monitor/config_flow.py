@@ -281,7 +281,7 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
                         data={**self.config_entry.options, CONF_CUSTOM_QUERIES: existing}
                     )
         return self.async_show_form(
-            step_id="add_query",
+            step_id="add_metric",
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_QUERY_NAME): str,

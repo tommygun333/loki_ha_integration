@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.1.4 — HACS custom repository**
+**Version 0.1.5 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -91,6 +91,8 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
 ## Changelog
+
+- **0.1.5:** Fix options flow form step mismatch when opening the Add LogQL metric sensor form. Add flow-step contract regression tests.
 
 - **0.1.4:** Refreshed numeric LogQL form translation key to avoid stale cached malformed text; corrected repository links and enabled GitHub Actions workflows. No sensor configuration migration required.
 
