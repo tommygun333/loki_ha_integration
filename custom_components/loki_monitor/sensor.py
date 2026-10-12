@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers import entity_registry as er
 
-from .const import CONF_CUSTOM_QUERIES, CONF_ICON, CONF_UNIT
+from .const import CONF_CUSTOM_QUERIES, CONF_ICON, CONF_UNIT, DOMAIN
 from .entity import LokiEntity
 from .monitoring import CONF_MONITORS
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -43,7 +47,37 @@ async def async_setup_entry(
                 entities.append(
                     LokiMonitorSensor(coordinator, entry.entry_id, definition, severity, window, label)
                 )
+    # Entity registry entries outlive the platform entities when an options flow
+    # removes a monitor or a custom metric. Reconcile after platform unload,
+    # before registering the current desired sensor set.
+    _remove_orphaned_dynamic_entities(hass, entry, entities)
     async_add_entities(entities)
+
+
+def _remove_orphaned_dynamic_entities(
+    hass: HomeAssistant, entry: ConfigEntry, entities: list[SensorEntity]
+) -> None:
+    """Prune deleted user-managed sensors, leaving built-ins and other entries alone.
+
+    Called on every sensor platform setup, including options reloads and restarts,
+    so it also cleans up orphaned entries left behind by earlier versions.
+    """
+    desired = {entity.unique_id for entity in entities}
+    registry = er.async_get(hass)
+    prefixes = (f"{entry.entry_id}_custom_", f"{entry.entry_id}_monitor_")
+    removed = 0
+    for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if (
+            registered.domain == "sensor"
+            and registered.platform == DOMAIN
+            and registered.config_entry_id == entry.entry_id
+            and registered.unique_id.startswith(prefixes)
+            and registered.unique_id not in desired
+        ):
+            registry.async_remove(registered.entity_id)
+            removed += 1
+    if removed:
+        _LOGGER.info("Removed %d obsolete Loki Monitor sensor registry entries", removed)
 
 
 class LokiMetricSensor(LokiEntity, SensorEntity):

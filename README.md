@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.2.0 — HACS custom repository**
+**Version 0.2.2 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -27,6 +27,7 @@ Updates: Until the first GitHub release, HACS tracks commits on the default bran
 - Last error timestamp, observed host list, and binary connectivity/label diagnostics.
 - User-defined numeric LogQL sensors (add, **edit**, remove and test queries in Configure).
 - **Per-host/service monitors**: choose a host and optional `service_name`, then get 1h/24h warning/error counts for that scope.
+- **Automatic entity registry cleanup**: deleting a custom metric or host/service monitor also removes its obsolete sensor entities during the next integration setup, including older orphaned entries. No extra reload mechanism is added.
 - **Isolated query failures**: individual broken queries do not take unrelated sensors offline; a diagnostic **Query failures** sensor lists affected query IDs. A full Loki outage remains visible.
 - `loki_monitor.query_logs` response-returning Home Assistant action for bounded, on-demand log retrieval.
 - Polling 60–3600 seconds (default 120) and multiple Loki instances.
@@ -74,11 +75,11 @@ Open **Settings → Devices & services → Grafana Loki Monitor → Configure �
 
 These sensors use the same detected-severity mode as the dashboard, or the optional indexed mode configured under Polling and label mapping. The monitor is matched by indexed `host` (or your configured host label) and optionally `service_name`; there is no automatic text recognition of service names. Unknown host/service combinations legitimately report zero. A maximum of 12 monitors can be configured to limit expensive 24h queries; polling is shared across all monitors and concurrent requests are bounded.
 
-To modify an existing monitor, use **Edit host/service monitor**. Its UUID and sensor unique IDs remain stable across edits. **Remove host/service monitor** stops creating its sensors; HA's entity registry may retain old entity registrations until cleaned up.
+To modify an existing monitor, use **Edit host/service monitor**. Its UUID and sensor unique IDs remain stable across edits. **Remove host/service monitor** also cleans up the four associated sensor registrations automatically when the integration reloads. Previously orphaned monitor entities are cleaned up on the next setup as well.
 
 ### Custom LogQL query management (v0.2)
 
-**Edit LogQL metric sensor** allows modifying an existing query, display name, unit, or icon without changing its unique ID. **Test LogQL metric query** executes a numeric instant query and displays the resulting value without creating an entity. Invalid or multiple-series outputs are reported as errors. Existing custom sensors are preserved during the v0.2 update.
+**Edit LogQL metric sensor** allows modifying an existing query, display name, unit, or icon without changing its unique ID. **Test LogQL metric query** executes a numeric instant query and displays the resulting value without creating an entity. Invalid or multiple-series outputs are reported as errors. Existing custom sensors are preserved during the v0.2 update. Removing a custom sensor also removes its entity registry record on the next integration setup.
 
 ### Partial-query failures (v0.2)
 
@@ -114,6 +115,8 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
 ## Changelog
+
+- **0.2.2:** Remove obsolete custom query and monitor sensor entities from the Home Assistant entity registry during sensor platform setup. Also cleans orphaned registry records left behind by v0.2.0. Keeps the existing automatic options reload behavior unchanged; v0.2.1 reload patch is not required.
 
 - **0.2.0:** Host/service scoped warning/error counters (1h and 24h), host/service discovery with custom values, add/edit/remove monitor UI, edit and test numeric LogQL queries, query-failure isolation, bounded parallel queries, and stronger options-flow regression tests. Existing entry IDs and custom query IDs retained.
 
