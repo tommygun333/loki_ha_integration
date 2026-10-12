@@ -9,7 +9,7 @@ A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's H
 **Repository:** `tommygun333/loki_ha_integration` — `https://github.com/tommygun333/loki_ha_integration`
 
 1. In Home Assistant open **HACS → ⋮ → Custom repositories**.
-2. Paste `https://github.com/tommygun333/ha-loki-monitor` and choose **Integration**, then Add.
+2. Paste `https://github.com/tommygun333/loki_ha_integration` and choose **Integration**, then Add.
 3. Find **Grafana Loki Monitor** in HACS and select **Download**.
 4. Restart Home Assistant Core.
 5. If this is your first installation, navigate to **Settings → Devices & services → Add integration → Grafana Loki Monitor** and connect to the Loki API (not the Grafana frontend URL).
