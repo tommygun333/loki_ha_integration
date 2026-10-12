@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.2.2 — HACS custom repository**
+**Version 0.3.0 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -29,10 +29,11 @@ Updates: Until the first GitHub release, HACS tracks commits on the default bran
 - **Per-host/service monitors**: choose a host and optional `service_name`, then get 1h/24h warning/error counts for that scope.
 - **Automatic entity registry cleanup**: deleting a custom metric or host/service monitor also removes its obsolete sensor entities during the next integration setup, including older orphaned entries. No extra reload mechanism is added.
 - **Isolated query failures**: individual broken queries do not take unrelated sensors offline; a diagnostic **Query failures** sensor lists affected query IDs. A full Loki outage remains visible.
+- **Native Loki log viewer**: a responsive Lovelace card backed by an admin-only Home Assistant WebSocket query API; no Loki credentials exposed to the browser. Includes filter suggestions, severity/host/service/source/program/text/regex filters, and older-page navigation.
 - `loki_monitor.query_logs` response-returning Home Assistant action for bounded, on-demand log retrieval.
 - Polling 60–3600 seconds (default 120) and multiple Loki instances.
 
-Not yet implemented: a native log viewer card, event/rule engine, live tailing, or Grafana deep links. This is an early prototype; please report bugs in the repository issue tracker.
+Not yet implemented: an event/rule engine, live tailing, or Grafana deep links. This is an early prototype; please report bugs in the repository issue tracker.
 
 ## Configuration
 
@@ -85,6 +86,36 @@ To modify an existing monitor, use **Edit host/service monitor**. Its UUID and s
 
 If a single built-in count, monitor, custom query, or label lookup fails, only affected data is marked unavailable; other sensors continue updating. When **every** query fails, the coordinator reports an outage and the `API available` binary sensor goes Off. Auth failures still trigger the reauthentication flow. Known-host counts refer to discovered Loki label values, not an active host heartbeat.
 
+### Native log viewer (v0.3)
+
+The viewer is a **read-only Lovelace custom card** supplied by the integration. HACS installs the JavaScript alongside the Python backend, but Home Assistant still needs its Lovelace resource added **once** (this is separate from installing the integration):
+
+1. After installing v0.3.0 through HACS, **restart Home Assistant** to register the backend API and static card resource.
+2. Open **Settings → Dashboards → Resources** (three-dot menu, depending on UI version). Add a **JavaScript module** resource with URL:
+   `/loki_monitor/loki-log-viewer-card.js?v=0.3.0`
+3. Add a **Manual card** to your Lovelace dashboard with:
+
+```yaml
+type: custom:loki-log-viewer-card
+minutes: 60
+page_size: 50
+severity: errors
+# Optional defaults:
+# host: CoreELEC
+# service: kodi
+# source: journal
+# program: systemd
+# text: failed
+# regex: '404|500'
+# entry_id: <HA Loki config entry ID, only necessary if choosing a default>
+```
+
+The card will discover all loaded Loki connections and let you choose one. If you have just one Loki server, no `entry_id` is needed. It presents **host, source, service, program, severity, plain-text and regex filtering**, time presets of 15 minutes through seven days, a 25/50/100 page size, and **Load older logs**. An admin may expand individual entries to see indexed labels and Loki structured metadata. Updating the card JavaScript in a future version requires updating the `?v=` resource query (or using a cache-busting refresh).
+
+**Safety and behavior:** Only **Home Assistant administrators** may call `loki_monitor/sources`, `loki_monitor/filters`, or `loki_monitor/query_logs`. The browser authenticates to Home Assistant's WebSocket and never connects directly to Loki; all API credentials stay server-side. The viewer generates fixed, escaped LogQL expressions rather than executing arbitrary unbounded LogQL from the card, bounds its date range (maximum seven days) and result pages (maximum 100 rows), and does **not** create sensors or insert raw logs into HA's recorder database. Results display as plain text, not HTML, and refresh only when requested (no live tail). Regex filters are evaluated by Loki; use selective ranges for expensive expressions. Like most time-based log pagination, entries at an identical nanosecond timestamp at a page boundary might be skipped; this is not a loss of stored Loki data.
+
+A successful frontend query requires the integration to be loaded and Loki to be reachable. For `source` and `service`, the viewer uses indexed Loki labels (`source` and `service_name`); the severity filter uses Loki's `detected_level` like your Grafana dashboard. After opening a new dashboard or updating the resource, refresh the browser if the card is initially listed as unknown.
+
 ### On-demand log queries
 
 Developer Tools → Actions → `loki_monitor.query_logs`, example:
@@ -115,6 +146,9 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
 ## Changelog
+
+- **0.3.0:** Admin-only WebSocket read APIs for log sources, filter suggestions and bounded paginated log streams; integrated responsive Lovelace log viewer card; validation, escaping, stable query-window cursors, and frontend resource documentation. Existing monitors, sensors, options, and automatic reloads unchanged.
+
 
 - **0.2.2:** Remove obsolete custom query and monitor sensor entities from the Home Assistant entity registry during sensor platform setup. Also cleans orphaned registry records left behind by v0.2.0. Keeps the existing automatic options reload behavior unchanged; v0.2.1 reload patch is not required.
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
@@ -17,6 +19,7 @@ from .api import LokiAuthError, LokiClient, LokiError
 from .const import CONF_QUERY, CONF_URL, CONF_VERIFY_SSL, DOMAIN
 from .coordinator import LokiCoordinator
 from .logic import flatten_streams
+from .websocket import async_register_websocket_commands
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -33,7 +36,15 @@ class LokiRuntimeData:
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register read-only query action once per integration domain."""
+    """Register read-only query action, WebSocket API and viewer JS once."""
+    async_register_websocket_commands(hass)
+    await hass.http.async_register_static_paths([
+        StaticPathConfig(
+            "/loki_monitor/loki-log-viewer-card.js",
+            str(Path(__file__).parent / "frontend" / "loki-log-viewer-card.js"),
+            False,  # Let browser fetch new card code after an integration update.
+        )
+    ])
 
     async def query_logs(call: ServiceCall) -> dict:
         entry_id = call.data.get("entry_id")

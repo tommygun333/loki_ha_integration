@@ -114,6 +114,26 @@ class LokiClient:
             raise LokiQueryError("Missing Loki range resultType")
         return data
 
+    async def async_query_streams_ns(
+        self, query: str, *, start_ns: int, end_ns: int, limit: int
+    ) -> dict[str, Any]:
+        """Fetch one backward page of log streams at nanosecond precision."""
+        if not 1 <= limit <= 101 or start_ns > end_ns:
+            raise ValueError("Invalid bounded log query range")
+        data = await self._get(
+            "loki/api/v1/query_range",
+            {
+                "query": query,
+                "start": str(start_ns),
+                "end": str(end_ns),
+                "direction": "backward",
+                "limit": limit,
+            },
+        )
+        if not isinstance(data, dict) or data.get("resultType") != "streams":
+            raise LokiQueryError("Loki log viewer requires stream results")
+        return data
+
     async def async_labels(self, since: str = "1h") -> list[str]:
         result = await self._get("loki/api/v1/labels", {"since": since})
         if not isinstance(result, list):

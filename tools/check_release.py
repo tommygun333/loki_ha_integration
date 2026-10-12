@@ -11,6 +11,7 @@ assert manifest["name"] == "Grafana Loki Monitor"
 assert manifest["version"] and "name" in hacs
 assert (root / "custom_components/loki_monitor/__init__.py").is_file()
 assert (root / "custom_components/loki_monitor/brand/icon.png").is_file()
+assert (root / "custom_components/loki_monitor/frontend/loki-log-viewer-card.js").is_file()
 assert manifest.get("issue_tracker", "").startswith("https://github.com/")
 if len(sys.argv) > 1:
     tag = sys.argv[1]

@@ -62,3 +62,24 @@ async def test_bad_query_error():
 def test_bad_url_rejected(url):
     with pytest.raises(ValueError):
         validate_url(url)
+
+
+@pytest.mark.asyncio
+async def test_viewer_queries_use_bounded_read_only_range():
+    session = MockSession(MockResponse(body={"status":"success","data":{"resultType":"streams","result":[]}}))
+    api = LokiClient(session, {CONF_URL:"http://loki:3100", CONF_AUTH_TYPE:"none"})
+    result = await api.async_query_streams_ns('{host="CoreELEC"}', start_ns=100, end_ns=400, limit=51)
+    assert result["resultType"] == "streams"
+    assert session.calls[0][0] == "http://loki:3100/loki/api/v1/query_range"
+    assert session.calls[0][1]["params"] == {
+        "query":'{host="CoreELEC"}',"start":"100","end":"400","direction":"backward","limit":51
+    }
+    with pytest.raises(ValueError):
+        await api.async_query_streams_ns('{host="x"}',start_ns=0,end_ns=10,limit=300)
+
+
+@pytest.mark.asyncio
+async def test_viewer_rejects_metric_result():
+    api = LokiClient(MockSession(MockResponse()), {CONF_URL:"http://loki:3100", CONF_AUTH_TYPE:"none"})
+    with pytest.raises(LokiQueryError, match="stream"):
+        await api.async_query_streams_ns('{host="x"}',start_ns=1,end_ns=10,limit=51)
