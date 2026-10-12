@@ -1,0 +1,34 @@
+query_logs:
+  name: Query Loki logs
+  description: Query a time range in Loki. Read-only; administrator use recommended. Results are returned as response data, not stored as entities.
+  fields:
+    entry_id:
+      name: Integration entry ID
+      description: Optional when exactly one Loki server is configured.
+      example: "01JABCDEF..."
+      selector:
+        text:
+    query:
+      required: true
+      name: LogQL stream query
+      description: Log stream query, for example a level matcher and text filter.
+      example: '{level="error"}'
+      selector:
+        text:
+          multiline: true
+    minutes:
+      name: Lookback in minutes
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 10080
+          mode: box
+    limit:
+      name: Maximum log entries
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 200
+          mode: box

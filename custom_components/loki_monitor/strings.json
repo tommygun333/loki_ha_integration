@@ -1,0 +1,105 @@
+{
+  "title": "Grafana Loki Monitor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Grafana Loki",
+        "description": "Enter the Loki server base URL (not the Grafana web UI URL). The integration only reads/query logs.",
+        "data": {
+          "url": "Loki base URL",
+          "auth_type": "Authentication",
+          "username": "Username (Basic auth)",
+          "password": "Password (Basic auth)",
+          "token": "Bearer token",
+          "tenant_id": "Loki tenant ID (optional)",
+          "verify_ssl": "Verify HTTPS certificate"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect Loki",
+        "description": "Your Loki credentials were rejected. Enter the current credentials for this Loki server.",
+        "data": {
+          "url": "Loki base URL",
+          "auth_type": "Authentication",
+          "username": "Username",
+          "password": "Password",
+          "token": "Bearer token",
+          "tenant_id": "Loki tenant ID",
+          "verify_ssl": "Verify HTTPS certificate"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Loki connection",
+        "data": {
+          "url": "Loki base URL",
+          "auth_type": "Authentication",
+          "username": "Username",
+          "password": "Password (leave empty to keep existing)",
+          "token": "Bearer token (leave empty to keep existing)",
+          "tenant_id": "Loki tenant ID",
+          "verify_ssl": "Verify HTTPS certificate"
+        }
+      }
+    },
+    "error": {
+      "invalid_configuration": "Invalid URL, authentication settings, or missing credentials.",
+      "cannot_connect": "Could not contact the Loki query API.",
+      "invalid_auth": "Authentication was denied by Loki or its proxy.",
+      "invalid_response": "Loki returned an invalid response; check the server base URL.",
+      "server_changed": "Reauthentication must use the existing Loki URL. Use Reconfigure to change servers.",
+      "already_configured": "That Loki URL is already configured."
+    },
+    "abort": {
+      "already_configured": "That Loki server is already configured.",
+      "reauth_successful": "Credentials updated.",
+      "reconfigure_successful": "Loki connection updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Manage Loki Monitor",
+        "menu_options": {
+          "settings": "Polling and label mapping",
+          "add_query": "Add LogQL metric sensor",
+          "remove_query": "Remove LogQL metric sensor"
+        }
+      },
+      "settings": {
+        "title": "Polling and label mapping",
+        "description": "Built-in counters use Loki detected_level by default, matching Grafana dashboard v1.5. Indexed severity mode retains the old label-based behavior; the indexed label and value fields only affect that mode.",
+        "data": {
+          "poll_seconds": "Polling interval (seconds)",
+          "level_label": "Indexed severity label name (indexed mode only)",
+          "host_label": "Host label name",
+          "error_levels": "Indexed error values (indexed mode only)",
+          "warn_levels": "Indexed warning values (indexed mode only)",
+          "severity_source": "Built-in severity counting mode"
+        }
+      },
+      "add_query": {
+        "title": "Add a numeric LogQL sensor",
+        "description": "Enter a LogQL instant metric query returning exactly one numeric value, for example vector(42). For counting logs, use sum(count_over_time(...)) with your own stream selector.",
+        "data": {
+          "query_name": "Name",
+          "query": "LogQL metric query",
+          "unit": "Optional unit",
+          "icon": "Optional MDI icon (mdi:...)"
+        }
+      },
+      "remove_query": {
+        "title": "Remove a query sensor",
+        "data": {
+          "query_id": "Sensor to remove"
+        }
+      }
+    },
+    "error": {
+      "invalid_labels": "Label names or severity values are invalid.",
+      "duplicate_or_empty": "Query and sensor name must be provided, and the name must be unique.",
+      "invalid_auth": "Authentication failed.",
+      "invalid_query": "Loki did not accept the query.",
+      "not_numeric": "The query must return a scalar or exactly one vector series. Use sum() to aggregate multiple series."
+    }
+  }
+}
