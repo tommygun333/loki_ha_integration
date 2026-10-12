@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.1.5 — HACS custom repository**
+**Version 0.2.0 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -25,11 +25,13 @@ Updates: Until the first GitHub release, HACS tracks commits on the default bran
 - Loki connection UI: HTTP Basic, Bearer token or no authentication, optional X-Scope-OrgID tenant, SSL verification.
 - Built-in 1h / 24h error and warning sensors; default `detected_level` queries match Grafana dashboard v1.5.
 - Last error timestamp, observed host list, and binary connectivity/label diagnostics.
-- User-defined numeric LogQL sensors (add/remove in Configure).
+- User-defined numeric LogQL sensors (add, **edit**, remove and test queries in Configure).
+- **Per-host/service monitors**: choose a host and optional `service_name`, then get 1h/24h warning/error counts for that scope.
+- **Isolated query failures**: individual broken queries do not take unrelated sensors offline; a diagnostic **Query failures** sensor lists affected query IDs. A full Loki outage remains visible.
 - `loki_monitor.query_logs` response-returning Home Assistant action for bounded, on-demand log retrieval.
 - Polling 60–3600 seconds (default 120) and multiple Loki instances.
 
-Not yet implemented: a native log viewer card, event/rule engine, live tailing, per-service sensors, or Grafana deep links. This is an early prototype; please report bugs in the repository issue tracker.
+Not yet implemented: a native log viewer card, event/rule engine, live tailing, or Grafana deep links. This is an early prototype; please report bugs in the repository issue tracker.
 
 ## Configuration
 
@@ -61,6 +63,27 @@ sum(count_over_time({host="CoreELEC",level=~"(?i)(error|fatal)"}[1h])) or vector
 
 Use actual host/label values shown in your Grafana Explore instance. A query returning multiple vector series is rejected: aggregate with `sum`, `max`, etc. A valid query returning an empty vector leaves the custom sensor unavailable until data appears.
 
+### Host/service monitoring (v0.2)
+
+Open **Settings → Devices & services → Grafana Loki Monitor → Configure → Add host/service monitor**.
+
+1. Enter a monitor name (for example *CoreELEC Kodi*).
+2. Choose the **Host** from recently observed Loki label values, or enter your own exact host value.
+3. Optionally choose **Service name** (matches Loki's indexed `service_name` label). Leave it blank for all services on that host.
+4. Save. Four sensors are created: **Errors (1h)**, **Errors (24h)**, **Warnings (1h)** and **Warnings (24h)**.
+
+These sensors use the same detected-severity mode as the dashboard, or the optional indexed mode configured under Polling and label mapping. The monitor is matched by indexed `host` (or your configured host label) and optionally `service_name`; there is no automatic text recognition of service names. Unknown host/service combinations legitimately report zero. A maximum of 12 monitors can be configured to limit expensive 24h queries; polling is shared across all monitors and concurrent requests are bounded.
+
+To modify an existing monitor, use **Edit host/service monitor**. Its UUID and sensor unique IDs remain stable across edits. **Remove host/service monitor** stops creating its sensors; HA's entity registry may retain old entity registrations until cleaned up.
+
+### Custom LogQL query management (v0.2)
+
+**Edit LogQL metric sensor** allows modifying an existing query, display name, unit, or icon without changing its unique ID. **Test LogQL metric query** executes a numeric instant query and displays the resulting value without creating an entity. Invalid or multiple-series outputs are reported as errors. Existing custom sensors are preserved during the v0.2 update.
+
+### Partial-query failures (v0.2)
+
+If a single built-in count, monitor, custom query, or label lookup fails, only affected data is marked unavailable; other sensors continue updating. When **every** query fails, the coordinator reports an outage and the `API available` binary sensor goes Off. Auth failures still trigger the reauthentication flow. Known-host counts refer to discovered Loki label values, not an active host heartbeat.
+
 ### On-demand log queries
 
 Developer Tools → Actions → `loki_monitor.query_logs`, example:
@@ -91,6 +114,8 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
 ## Changelog
+
+- **0.2.0:** Host/service scoped warning/error counters (1h and 24h), host/service discovery with custom values, add/edit/remove monitor UI, edit and test numeric LogQL queries, query-failure isolation, bounded parallel queries, and stronger options-flow regression tests. Existing entry IDs and custom query IDs retained.
 
 - **0.1.5:** Fix options flow form step mismatch when opening the Add LogQL metric sensor form. Add flow-step contract regression tests.
 

@@ -30,6 +30,7 @@ from .const import (
     SEVERITY_SOURCE_DETECTED,
     SEVERITY_SOURCE_INDEXED,
 )
+from .monitoring import CONF_MONITORS, monitor_selector
 from .logic import (
     count_query,
     detected_level_selector,
@@ -77,6 +78,7 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed("Unknown Loki severity source setting")
 
         custom = self.options.get(CONF_CUSTOM_QUERIES, [])
+        monitors = self.options.get(CONF_MONITORS, [])
         work = {
             "errors_1h": self.api.async_query(count_query(error_selector, "1h")),
             "errors_24h": self.api.async_query(count_query(error_selector, "24h")),
@@ -86,56 +88,116 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "labels": self.api.async_labels(),
             "hosts": self.api.async_label_values(host_label),
         }
-        # Custom metrics must not take down the default sensors if their LogQL is invalid.
+        for monitor in monitors:
+            for severity in ("error", "warn"):
+                scoped = monitor_selector(
+                    monitor,
+                    host_label=host_label,
+                    severity_source=severity_source,
+                    level_label=label,
+                    severity_values=self.options.get(
+                        CONF_ERROR_LEVELS if severity == "error" else CONF_WARN_LEVELS,
+                        DEFAULT_ERROR_LEVELS if severity == "error" else DEFAULT_WARN_LEVELS,
+                    ),
+                    severity=severity,
+                )
+                plural = "errors" if severity == "error" else "warnings"
+                for window in ("1h", "24h"):
+                    key = f"monitor_{monitor['id']}_{plural}_{window}"
+                    work[key] = self.api.async_query(count_query(scoped, window))
+
         for item in custom:
             work[f"custom_{item['id']}"] = self.api.async_query(item["query"])
 
+        # Bound concurrent Loki requests when many monitors are configured.
+        limit = asyncio.Semaphore(6)
+
+        async def limited(coro):
+            async with limit:
+                return await coro
+
         names = list(work)
-        outcomes = await asyncio.gather(*work.values(), return_exceptions=True)
+        outcomes = await asyncio.gather(
+            *(limited(coro) for coro in work.values()), return_exceptions=True
+        )
         values: dict[str, Any] = {}
+        failures: set[str] = set()
+        successful = 0
         for name, outcome in zip(names, outcomes, strict=True):
             if isinstance(outcome, LokiAuthError):
                 raise ConfigEntryAuthFailed("Loki authentication failed") from outcome
             if isinstance(outcome, asyncio.CancelledError):
                 raise outcome
-            if isinstance(outcome, Exception):
-                if name.startswith("custom_"):
-                    if name not in self._failing_queries:
-                        _LOGGER.warning("Custom Loki sensor %s failed: %s", name, type(outcome).__name__)
-                        self._failing_queries.add(name)
-                    values[name] = None
-                    continue
-                if isinstance(outcome, LokiError):
-                    raise UpdateFailed(f"Loki query {name} failed: {outcome}") from outcome
-                raise UpdateFailed(f"Loki query {name} failed") from outcome
-            values[name] = outcome
+            if isinstance(outcome, BaseException):
+                failures.add(name)
+                # Avoid logging raw LogQL or exceptions that could disclose log data.
+                if name not in self._failing_queries:
+                    _LOGGER.warning("Loki query %s failed (%s)", name, type(outcome).__name__)
+                    self._failing_queries.add(name)
+                values[name] = None
+            else:
+                successful += 1
+                values[name] = outcome
+                if name in self._failing_queries:
+                    _LOGGER.info("Loki query %s recovered", name)
+                    self._failing_queries.discard(name)
 
-        try:
-            result: dict[str, Any] = {
-                key: extract_number(values[key], empty_is_zero=True)
-                for key in ("errors_1h", "errors_24h", "warnings_1h", "warnings_24h")
-            }
-            result["last_error"] = extract_latest_timestamp(values["last_error"])
-            result["available_labels"] = values["labels"]
-            result["severity_label_present"] = label in values["labels"]
-            result["host_label_present"] = host_label in values["labels"]
-            result["hosts"] = sorted(set(values["hosts"]))
-            result["active_hosts"] = len(result["hosts"]) if result["host_label_present"] else None
-        except (TypeError, KeyError, ValueError) as err:
-            raise UpdateFailed("Invalid Loki response content") from err
+        # If all requests failed, this is a connection/API outage rather than
+        # a handful of broken LogQL expressions.
+        if not successful:
+            raise UpdateFailed("Every Loki query failed; check the server connection")
+
+        result: dict[str, Any] = {"failed_queries": sorted(failures)}
+        for key in ("errors_1h", "errors_24h", "warnings_1h", "warnings_24h"):
+            if key not in failures:
+                try:
+                    result[key] = extract_number(values[key], empty_is_zero=True)
+                except (TypeError, KeyError, ValueError):
+                    failures.add(key)
+            result.setdefault(key, None)
+
+        if "last_error" not in failures:
+            try:
+                result["last_error"] = extract_latest_timestamp(values["last_error"])
+            except (TypeError, KeyError, ValueError):
+                failures.add("last_error")
+        result.setdefault("last_error", None)
+
+        labels = values.get("labels")
+        hosts = values.get("hosts")
+        result["available_labels"] = labels if isinstance(labels, list) else []
+        result["severity_label_present"] = (label in labels) if isinstance(labels, list) else None
+        result["host_label_present"] = (host_label in labels) if isinstance(labels, list) else None
+        result["hosts"] = sorted(set(hosts)) if isinstance(hosts, list) else []
+        result["active_hosts"] = (
+            len(result["hosts"])
+            if isinstance(hosts, list) and result["host_label_present"] is not False
+            else None
+        )
+        if result["active_hosts"] is None:
+            failures.add("active_hosts")
+        if not isinstance(labels, list):
+            failures.update(("severity_label_present", "host_label_present"))
+
+        for monitor in monitors:
+            for severity in ("errors", "warnings"):
+                for window in ("1h", "24h"):
+                    key = f"monitor_{monitor['id']}_{severity}_{window}"
+                    if key not in failures:
+                        try:
+                            result[key] = extract_number(values[key], empty_is_zero=True)
+                        except (TypeError, KeyError, ValueError):
+                            failures.add(key)
+                    result.setdefault(key, None)
 
         for item in custom:
-            name = f"custom_{item['id']}"
-            try:
-                result[name] = (
-                    extract_number(values[name]) if values[name] is not None else None
-                )
-                if values[name] is not None and name in self._failing_queries:
-                    _LOGGER.info("Custom Loki sensor %s recovered", item["name"])
-                    self._failing_queries.discard(name)
-            except (TypeError, ValueError, KeyError):
-                result[name] = None
-                if name not in self._failing_queries:
-                    _LOGGER.warning("Custom Loki sensor %s did not return one numeric value", item["name"])
-                    self._failing_queries.add(name)
+            key = f"custom_{item['id']}"
+            if key not in failures:
+                try:
+                    result[key] = extract_number(values[key])
+                except (TypeError, ValueError, KeyError):
+                    failures.add(key)
+            result.setdefault(key, None)
+        result["failed_queries"] = sorted(failures)
+        result["failed_query_count"] = len(failures)
         return result

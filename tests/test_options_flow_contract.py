@@ -26,7 +26,7 @@ def test_options_flow_form_step_ids_match_their_handlers():
         and node.name.startswith("async_step_")
     }
 
-    assert {"init", "settings", "add_metric", "remove_query"} <= handlers.keys()
+    assert {"init", "settings", "add_metric", "edit_metric", "test_metric", "add_monitor", "edit_monitor", "remove_query", "remove_monitor"} <= handlers.keys()
 
     for step_name, handler in handlers.items():
         for node in ast.walk(handler):
@@ -69,5 +69,5 @@ def test_options_menu_targets_have_handlers():
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "append":
             if isinstance(node.func.value, ast.Name) and node.func.value.id == "choices":
                 targets.update(a.value for a in node.args if isinstance(a, ast.Constant))
-    assert {"settings", "add_metric", "remove_query"} <= targets
+    assert {"settings", "add_metric", "test_metric", "select_metric", "remove_query", "add_monitor", "select_monitor", "remove_monitor"} <= targets
     assert targets <= handlers

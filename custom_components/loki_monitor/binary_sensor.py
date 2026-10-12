@@ -55,5 +55,13 @@ class LokiDiagnostic(LokiEntity, BinarySensorEntity):
         self._attr_name = name
 
     @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and self.coordinator.data is not None
+            and self.key not in self.coordinator.data.get("failed_queries", [])
+        )
+
+    @property
     def is_on(self) -> bool | None:
         return self.coordinator.data.get(self.key)

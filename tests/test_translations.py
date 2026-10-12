@@ -20,6 +20,11 @@ def test_custom_integration_translations_have_no_unescaped_curly_braces():
     for fname in ("strings.json", "translations/en.json"):
         data = json.loads((COMPONENT_DIR / fname).read_text())
         for key, value in _strings(data):
+            # Home Assistant supports valid ICU placeholders; only the explicit
+            # preview result placeholder is allowed, never a raw LogQL selector.
+            if key == "options.step.test_metric.description":
+                assert value.count("{result}") == 1
+                value = value.replace("{result}", "")
             assert "{" not in value and "}" not in value, f"{fname}: {key}"
 
 

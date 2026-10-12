@@ -152,3 +152,75 @@ async def test_custom_sensor_unchanged_by_severity_source(coordinator_class):
     })
     await coordinator._async_update_data()
     assert query in api.metric_queries
+
+
+@pytest.mark.asyncio
+async def test_scoped_monitor_counts_and_stable_ids(coordinator_class):
+    api = FakeAPI()
+    options = {"monitors": [{"id": "abc", "name": "Kodi", "host": "CoreELEC", "service": "kodi"}]}
+    coordinator = coordinator_class(None, api, options)
+    result = await coordinator._async_update_data()
+    assert result["monitor_abc_errors_1h"] == 9
+    assert result["monitor_abc_errors_24h"] == 9
+    assert result["monitor_abc_warnings_1h"] == 9
+    assert result["monitor_abc_warnings_24h"] == 9
+    assert sum('{host="CoreELEC",service_name="kodi"}' in q for q in api.metric_queries) == 4
+
+
+@pytest.mark.asyncio
+async def test_individual_builtin_failure_isolated(coordinator_class):
+    class PartlyBrokenAPI(FakeAPI):
+        async def async_query(self, query):
+            if 'detected_level=~"(?i)warn"[24h]' in query:
+                raise LokiQueryError("warning metric failed")
+            return await super().async_query(query)
+
+        async def async_label_values(self, label):
+            raise LokiQueryError("host lookup failed")
+
+    coordinator = coordinator_class(None, PartlyBrokenAPI(), {})
+    result = await coordinator._async_update_data()
+    assert result["errors_1h"] == 9
+    assert result["warnings_1h"] == 9
+    assert result["warnings_24h"] is None
+    assert result["active_hosts"] is None
+    assert "warnings_24h" in result["failed_queries"]
+    assert "active_hosts" in result["failed_queries"]
+    assert result["failed_query_count"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_failed_monitor_does_not_break_builtins(coordinator_class):
+    class PartlyBrokenAPI(FakeAPI):
+        async def async_query(self, query):
+            if 'host="FailingHost"' in query:
+                raise LokiQueryError("bad monitor query")
+            return await super().async_query(query)
+
+    coordinator = coordinator_class(None, PartlyBrokenAPI(), {
+        "monitors": [{"id":"xyz", "name":"Failing", "host":"FailingHost", "service":""}]
+    })
+    result = await coordinator._async_update_data()
+    assert result["errors_1h"] == 9
+    assert result["monitor_xyz_errors_24h"] is None
+    assert "monitor_xyz_errors_24h" in result["failed_queries"]
+
+
+@pytest.mark.asyncio
+async def test_complete_loki_outage_marks_update_failed(coordinator_class):
+    class OfflineAPI(FakeAPI):
+        async def async_query(self, query):
+            raise LokiQueryError("offline")
+
+        async def async_recent_logs(self, query, **kwargs):
+            raise LokiQueryError("offline")
+
+        async def async_labels(self):
+            raise LokiQueryError("offline")
+
+        async def async_label_values(self, label):
+            raise LokiQueryError("offline")
+
+    coordinator = coordinator_class(None, OfflineAPI(), {})
+    with pytest.raises(FakeUpdateFailed):
+        await coordinator._async_update_data()

@@ -62,7 +62,12 @@
         "menu_options": {
           "settings": "Polling and label mapping",
           "remove_query": "Remove LogQL metric sensor",
-          "add_metric": "Add LogQL metric sensor"
+          "add_metric": "Add LogQL metric sensor",
+          "test_metric": "Test LogQL metric query",
+          "select_metric": "Edit LogQL metric sensor",
+          "add_monitor": "Add host/service monitor",
+          "select_monitor": "Edit host/service monitor",
+          "remove_monitor": "Remove host/service monitor"
         }
       },
       "settings": {
@@ -92,6 +97,59 @@
           "unit": "Optional unit",
           "icon": "Optional MDI icon (mdi:...)"
         }
+      },
+      "select_metric": {
+        "title": "Choose a metric sensor to edit",
+        "data": {
+          "query_id": "Existing metric sensor"
+        }
+      },
+      "edit_metric": {
+        "title": "Edit LogQL metric sensor",
+        "description": "Update the query and sensor properties. The existing sensor ID is retained.",
+        "data": {
+          "query_name": "Name",
+          "query": "LogQL metric query",
+          "unit": "Optional unit",
+          "icon": "Optional MDI icon (mdi:...)"
+        }
+      },
+      "test_metric": {
+        "title": "Test a LogQL metric query",
+        "description": "Run the query without saving a sensor. Result: {result}",
+        "data": {
+          "query": "LogQL metric query"
+        }
+      },
+      "add_monitor": {
+        "title": "Add a host/service monitor",
+        "description": "Choose a Loki host. Optionally narrow it to a service_name value. Creates four counters: errors and warnings over 1 and 24 hours. Custom host/service values are allowed.",
+        "data": {
+          "monitor_name": "Monitor name",
+          "monitor_host": "Host",
+          "monitor_service": "Service name (optional)"
+        }
+      },
+      "select_monitor": {
+        "title": "Choose a monitor to edit",
+        "data": {
+          "monitor_id": "Existing monitor"
+        }
+      },
+      "edit_monitor": {
+        "title": "Edit host/service monitor",
+        "description": "The existing monitor ID and its entity history are preserved.",
+        "data": {
+          "monitor_name": "Monitor name",
+          "monitor_host": "Host",
+          "monitor_service": "Service name (optional)"
+        }
+      },
+      "remove_monitor": {
+        "title": "Remove a host/service monitor",
+        "data": {
+          "monitor_id": "Monitor to remove"
+        }
       }
     },
     "error": {
@@ -99,7 +157,10 @@
       "duplicate_or_empty": "Query and sensor name must be provided, and the name must be unique.",
       "invalid_auth": "Authentication failed.",
       "invalid_query": "Loki did not accept the query.",
-      "not_numeric": "The query must return a scalar or exactly one vector series. Use sum() to aggregate multiple series."
+      "not_numeric": "The query must return a scalar or exactly one vector series. Use sum() to aggregate multiple series.",
+      "invalid_monitor": "Enter a valid monitor name, host and optional service. Check the Loki query.",
+      "monitor_limit": "The maximum of 12 monitors has been reached.",
+      "duplicate_monitor": "A monitor with this name or host/service combination already exists."
     }
   }
 }
