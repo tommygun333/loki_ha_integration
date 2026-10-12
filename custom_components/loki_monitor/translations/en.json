@@ -61,8 +61,8 @@
         "title": "Manage Loki Monitor",
         "menu_options": {
           "settings": "Polling and label mapping",
-          "add_query": "Add LogQL metric sensor",
-          "remove_query": "Remove LogQL metric sensor"
+          "remove_query": "Remove LogQL metric sensor",
+          "add_metric": "Add LogQL metric sensor"
         }
       },
       "settings": {
@@ -77,20 +77,20 @@
           "severity_source": "Built-in severity counting mode"
         }
       },
-      "add_query": {
+      "remove_query": {
+        "title": "Remove a query sensor",
+        "data": {
+          "query_id": "Sensor to remove"
+        }
+      },
+      "add_metric": {
         "title": "Add a numeric LogQL sensor",
-        "description": "Enter a LogQL instant metric query returning exactly one numeric value, for example vector(42). For counting logs, use sum(count_over_time(...)) with your own stream selector.",
+        "description": "Enter a LogQL instant metric query that returns one numeric value. For example: vector(42).",
         "data": {
           "query_name": "Name",
           "query": "LogQL metric query",
           "unit": "Optional unit",
           "icon": "Optional MDI icon (mdi:...)"
-        }
-      },
-      "remove_query": {
-        "title": "Remove a query sensor",
-        "data": {
-          "query_id": "Sensor to remove"
         }
       }
     },

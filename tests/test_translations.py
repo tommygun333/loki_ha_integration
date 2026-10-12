@@ -26,7 +26,7 @@ def test_custom_integration_translations_have_no_unescaped_curly_braces():
 def test_translations_agree_for_numeric_query_form():
     source = json.loads((COMPONENT_DIR / "strings.json").read_text())
     active = json.loads((COMPONENT_DIR / "translations/en.json").read_text())
-    assert source["options"]["step"]["add_query"] == active["options"]["step"]["add_query"]
+    assert source["options"]["step"]["add_metric"] == active["options"]["step"]["add_metric"]
 
 
 def test_options_severity_mode_translation_present_and_consistent():
@@ -34,3 +34,17 @@ def test_options_severity_mode_translation_present_and_consistent():
     active = json.loads((COMPONENT_DIR / "translations/en.json").read_text())
     assert source["options"]["step"]["settings"] == active["options"]["step"]["settings"]
     assert "severity_source" in active["options"]["step"]["settings"]["data"]
+
+
+def test_numeric_query_form_uses_fresh_translation_key():
+    """Do not reuse old add_query key cached with a malformed ICU description."""
+    source = json.loads((COMPONENT_DIR / "strings.json").read_text())
+    active = json.loads((COMPONENT_DIR / "translations/en.json").read_text())
+    flow = (COMPONENT_DIR / "config_flow.py").read_text()
+    for data in (source, active):
+        assert "add_metric" in data["options"]["step"]
+        assert "add_query" not in data["options"]["step"]
+        assert "add_metric" in data["options"]["step"]["init"]["menu_options"]
+        assert "add_query" not in data["options"]["step"]["init"]["menu_options"]
+    assert "async def async_step_add_metric(" in flow
+    assert "async def async_step_add_query(" not in flow

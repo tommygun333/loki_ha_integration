@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.1.3 — HACS custom repository release**
+**Version 0.1.4 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -16,7 +16,7 @@ A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's H
 
 **Already installed manually?** Keep the existing `loki_monitor` config entry, sensors, and custom queries. **Do not delete the integration in Devices & services.** HACS installs the same files to `/config/custom_components/loki_monitor`, replacing the manual files, then you restart HA. Existing config entries use the unchanged `loki_monitor` domain and remain intact. Keep a HA backup before migration.
 
-Updates: HACS displays new GitHub releases. Update in HACS then restart HA. New releases are published by the repository's tag-triggered GitHub Actions workflow.
+Updates: Until the first GitHub release, HACS tracks commits on the default branch. After a GitHub release is published, HACS will track release versions. Update in HACS, then restart HA and refresh the frontend if translations look stale.
 
 **Before adding to HACS:** The repository owner must publish this repository on GitHub. A local ZIP by itself is **not** a working HACS custom repository.
 
@@ -91,6 +91,8 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
 ## Changelog
+
+- **0.1.4:** Refreshed numeric LogQL form translation key to avoid stale cached malformed text; corrected repository links and enabled GitHub Actions workflows. No sensor configuration migration required.
 
 - **0.1.3:** HACS-ready repository metadata, documentation, CI, versioned GitHub release workflow. No behavioral changes to the Loki API or sensors.
 - **0.1.2:** Grafana-aligned `detected_level` severity mode and fallback to indexed labels.

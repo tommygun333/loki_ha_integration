@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+# Development/editor
+.idea/
+.vscode/
+.DS_Store
+# Local HA configuration and secrets
+.storage/
+secrets.yaml
+configuration.yaml
+.env

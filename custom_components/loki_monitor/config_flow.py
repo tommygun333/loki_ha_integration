@@ -204,7 +204,7 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
     """Tuning settings and adding/removing individual LogQL metric sensors."""
 
     async def async_step_init(self, user_input=None) -> ConfigFlowResult:
-        choices = ["settings", "add_query"]
+        choices = ["settings", "add_metric"]
         if self.config_entry.options.get(CONF_CUSTOM_QUERIES):
             choices.append("remove_query")
         return self.async_show_menu(step_id="init", menu_options=choices)
@@ -244,7 +244,7 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         )
         return self.async_show_form(step_id="settings", data_schema=schema, errors=errors)
 
-    async def async_step_add_query(
+    async def async_step_add_metric(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
