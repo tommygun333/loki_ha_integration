@@ -32,6 +32,7 @@ async def async_setup_entry(
         "active_hosts": ("Observed hosts (approximately 1 hour)", "mdi:server-network"),
         "last_error": ("Last error", "mdi:clock-alert-outline"),
         "failed_query_count": ("Query failures", "mdi:alert-box-outline"),
+        "alert_rule_failures_count": ("Alert rule failures", "mdi:bell-alert-outline"),
     }
     entities = [
         LokiMetricSensor(coordinator, entry.entry_id, key, name, icon)
@@ -91,7 +92,7 @@ class LokiMetricSensor(LokiEntity, SensorEntity):
             self._attr_device_class = SensorDeviceClass.TIMESTAMP
         else:
             self._attr_state_class = SensorStateClass.MEASUREMENT
-        if key == "failed_query_count":
+        if key in ("failed_query_count", "alert_rule_failures_count"):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
@@ -117,6 +118,8 @@ class LokiMetricSensor(LokiEntity, SensorEntity):
             return {"hosts": self.coordinator.data.get("hosts", [])}
         if self.key == "failed_query_count":
             return {"failed_queries": self.coordinator.data.get("failed_queries", [])}
+        if self.key == "alert_rule_failures_count":
+            return {"failed_rules": self.coordinator.data.get("alert_rule_failures", [])}
         return None
 
 

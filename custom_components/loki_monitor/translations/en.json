@@ -67,15 +67,19 @@
           "select_metric": "Edit LogQL metric sensor",
           "add_monitor": "Add host/service monitor",
           "select_monitor": "Edit host/service monitor",
-          "remove_monitor": "Remove host/service monitor"
+          "remove_monitor": "Remove host/service monitor",
+          "add_alert": "Add alert rule",
+          "test_alert": "Test alert rule (no events)",
+          "select_alert": "Edit alert rule",
+          "remove_alert": "Remove alert rule"
         }
       },
       "settings": {
         "title": "Polling and label mapping",
-        "description": "Built-in counters use Loki detected_level by default, matching Grafana dashboard v1.5. Indexed severity mode retains the old label-based behavior; the indexed label and value fields only affect that mode.",
+        "description": "Choose detected, indexed, or optional canonical Grafana v1.9 severity classification. Canonical mode handles indexed levels, detected_level and inline log markers, but uses more Loki resources. Current settings are preserved until you change them.",
         "data": {
           "poll_seconds": "Polling interval (seconds)",
-          "level_label": "Indexed severity label name (indexed mode only)",
+          "level_label": "Indexed severity label (indexed mode)",
           "host_label": "Host label name",
           "error_levels": "Indexed error values (indexed mode only)",
           "warn_levels": "Indexed warning values (indexed mode only)",
@@ -150,6 +154,75 @@
         "data": {
           "monitor_id": "Monitor to remove"
         }
+      },
+      "add_alert": {
+        "title": "Add a Loki alert rule",
+        "description": "Emit a loki_monitor_alert event when new matching logs meet the count threshold. Existing logs do not trigger an alert when the rule is created. For reliability, choose a window at least as long as the poll interval.",
+        "data": {
+          "name": "Rule name",
+          "enabled": "Enabled",
+          "host": "Host (optional)",
+          "source": "Source (optional)",
+          "service": "Service name (optional)",
+          "program": "Syslog identifier (optional)",
+          "severity": "Severity",
+          "text": "Text contains (optional)",
+          "regex": "Line regex (optional)",
+          "threshold": "Minimum matching logs",
+          "window_minutes": "Time window (minutes)",
+          "cooldown_minutes": "Cooldown (minutes)",
+          "include_message": "Include last matching log line in event (sensitive)"
+        }
+      },
+      "select_alert": {
+        "title": "Select an alert rule to edit",
+        "data": {
+          "rule_id": "Alert rule"
+        }
+      },
+      "edit_alert": {
+        "title": "Edit a Loki alert rule",
+        "description": "Keep the same rule ID and checkpoint. Editing the rule does not replay previously processed logs.",
+        "data": {
+          "name": "Rule name",
+          "enabled": "Enabled",
+          "host": "Host (optional)",
+          "source": "Source (optional)",
+          "service": "Service name (optional)",
+          "program": "Syslog identifier (optional)",
+          "severity": "Severity",
+          "text": "Text contains (optional)",
+          "regex": "Line regex (optional)",
+          "threshold": "Minimum matching logs",
+          "window_minutes": "Time window (minutes)",
+          "cooldown_minutes": "Cooldown (minutes)",
+          "include_message": "Include last matching log line in event (sensitive)"
+        }
+      },
+      "remove_alert": {
+        "title": "Remove a Loki alert rule",
+        "data": {
+          "rule_id": "Alert rule to remove"
+        }
+      },
+      "test_alert": {
+        "title": "Preview a Loki alert rule",
+        "description": "Count matching logs now without firing any event. Matches in the selected window: {count}",
+        "data": {
+          "name": "Rule name",
+          "enabled": "Enabled",
+          "host": "Host (optional)",
+          "source": "Source (optional)",
+          "service": "Service name (optional)",
+          "program": "Syslog identifier (optional)",
+          "severity": "Severity",
+          "text": "Text contains (optional)",
+          "regex": "Line regex (optional)",
+          "threshold": "Minimum matching logs",
+          "window_minutes": "Time window (minutes)",
+          "cooldown_minutes": "Cooldown (minutes)",
+          "include_message": "Include last matching log line in event (sensitive)"
+        }
       }
     },
     "error": {
@@ -160,7 +233,9 @@
       "not_numeric": "The query must return a scalar or exactly one vector series. Use sum() to aggregate multiple series.",
       "invalid_monitor": "Enter a valid monitor name, host and optional service. Check the Loki query.",
       "monitor_limit": "The maximum of 12 monitors has been reached.",
-      "duplicate_monitor": "A monitor with this name or host/service combination already exists."
+      "duplicate_monitor": "A monitor with this name or host/service combination already exists.",
+      "duplicate_or_limit_alert": "A rule with this name exists, or the maximum of 12 alert rules has been reached.",
+      "invalid_alert": "Invalid rule settings or Loki query. Verify the values, severity, regex and numeric limits."
     }
   }
 }

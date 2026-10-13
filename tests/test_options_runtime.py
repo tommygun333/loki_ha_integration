@@ -155,3 +155,32 @@ async def test_monitor_add_edit_remove_and_options_preservation(flow):
     flow.config_entry.options = edited["data"]
     removed = await flow.async_step_remove_monitor({"monitor_id":monitor["id"]})
     assert removed["data"]["monitors"] == []
+
+@pytest.mark.asyncio
+async def test_alert_forms_add_edit_preview_remove_preserve_rules(flow):
+    from loki_monitor.alerts import clean_rule
+    menu = await flow.async_step_init()
+    assert "add_alert" in menu["menu_options"]
+    assert "test_alert" in menu["menu_options"]
+    assert (await flow.async_step_add_alert())["step_id"] == "add_alert"
+    base = {"name":"CoreELEC crash", "host":"CoreELEC", "severity":"errors",
+            "threshold":3,"window_minutes":5,"cooldown_minutes":15}
+    created = await flow.async_step_add_alert(base)
+    assert created["type"] == "create_entry"
+    rule = created["data"]["alert_rules"][0]
+    assert rule["host"] == "CoreELEC"
+    assert rule["threshold"] == 3
+    flow.config_entry.options = created["data"]
+    selected = await flow.async_step_select_alert({"rule_id":rule["id"]})
+    assert selected["step_id"] == "edit_alert"
+    edited = await flow.async_step_edit_alert({**base,"name":"Renamed","threshold":4})
+    assert edited["data"]["alert_rules"][0]["id"] == rule["id"]
+    assert edited["data"]["alert_rules"][0]["threshold"] == 4
+    tested = await flow.async_step_test_alert(base)
+    assert tested["step_id"] == "test_alert"
+    assert tested["description_placeholders"]["count"] == "42"
+    invalid = await flow.async_step_add_alert({**base,"regex":"["})
+    assert invalid["errors"]["base"] == "invalid_alert"
+    flow.config_entry.options = edited["data"]
+    removed = await flow.async_step_remove_alert({"rule_id":rule["id"]})
+    assert removed["data"]["alert_rules"] == []

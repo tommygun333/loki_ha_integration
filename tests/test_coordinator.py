@@ -224,3 +224,34 @@ async def test_complete_loki_outage_marks_update_failed(coordinator_class):
     coordinator = coordinator_class(None, OfflineAPI(), {})
     with pytest.raises(FakeUpdateFailed):
         await coordinator._async_update_data()
+
+@pytest.mark.asyncio
+async def test_canonical_counters_and_monitor_use_grafana_v19_severity(coordinator_class):
+    from loki_monitor.viewer import CANONICAL_SEVERITY_TEMPLATE
+    api=FakeAPI()
+    coordinator=coordinator_class(None,api,{
+        "severity_source":"canonical",
+        "monitors":[{"id":"kodi","name":"Kodi","host":"CoreELEC","service":"coreelec-system"}],
+    })
+    data=await coordinator._async_update_data()
+    assert data["errors_1h"] == 9
+    assert data["monitor_kodi_errors_1h"] == 9
+    assert any(CANONICAL_SEVERITY_TEMPLATE in q for q in api.metric_queries)
+    assert any(' | severity=~"(?i)^(emergency|alert|critical|fatal|error)$"' in q for q in api.metric_queries)
+    assert any(' | severity=~"(?i)^warning$"' in q for q in api.metric_queries)
+    assert any('{host="CoreELEC",service_name="coreelec-system"}' in q for q in api.metric_queries)
+    assert " | severity=~" in api.recent_queries[0][0]
+    assert data["alert_rule_failures_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_alert_failure_is_isolated_from_metric_sensors(coordinator_class):
+    class BrokenAlertEngine:
+        async def async_check(self, rules):
+            raise RuntimeError("bad alert")
+    api=FakeAPI()
+    coordinator=coordinator_class(None,api,{"alert_rules":[{"id":"broken"}]}, alerts=BrokenAlertEngine())
+    data=await coordinator._async_update_data()
+    assert data["errors_1h"] == 9
+    assert data["alert_rule_failures_count"] == 1
+    assert data["alert_rule_failures"] == ["broken"]

@@ -25,6 +25,9 @@ def test_custom_integration_translations_have_no_unescaped_curly_braces():
             if key == "options.step.test_metric.description":
                 assert value.count("{result}") == 1
                 value = value.replace("{result}", "")
+            if key == "options.step.test_alert.description":
+                assert value.count("{count}") == 1
+                value = value.replace("{count}", "")
             assert "{" not in value and "}" not in value, f"{fname}: {key}"
 
 

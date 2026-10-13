@@ -128,7 +128,7 @@ async def test_deleted_custom_query_and_monitor_are_pruned(sensor_module):
         for window in ("1h", "24h")
     }
     assert set(hass.registry.removed) == expected
-    assert len(added) == 7 + 1 + 4
+    assert len(added) == 8 + 1 + 4
     assert {x.unique_id for x in added if x.key.startswith("monitor_")} == {
         f"{entry_id}_{keep_monitor}_{severity}_{window}"
         for severity in ("errors", "warnings")
@@ -161,7 +161,7 @@ async def test_previous_orphans_cleaned_even_when_no_dynamic_options(sensor_modu
         "sensor.custom_orphan",
         "sensor.monitor_orphan_errors_24h",
     }
-    assert len(added) == 7
+    assert len(added) == 8
 
 
 @pytest.mark.asyncio

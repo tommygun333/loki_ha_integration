@@ -46,10 +46,14 @@ from .const import (
     DOMAIN,
     SEVERITY_SOURCE_DETECTED,
     SEVERITY_SOURCE_INDEXED,
+    SEVERITY_SOURCE_CANONICAL,
     MAX_POLL_SECONDS,
     MIN_POLL_SECONDS,
 )
 from .logic import count_query, extract_number, level_selector, validate_label_name
+from .alerts import (
+    CONF_ALERT_RULES, MAX_ALERT_RULES, DEFAULT_RULE, RULE_FIELDS, clean_rule, test_alert_rule,
+)
 from .monitoring import (
     CONF_MONITORS, CONF_MONITOR_ID, CONF_MONITOR_NAME, CONF_MONITOR_HOST,
     CONF_MONITOR_SERVICE, MAX_MONITORS, SERVICE_LABEL, clean_monitor, monitor_selector,
@@ -220,7 +224,9 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         return self.async_create_entry(data={**self.config_entry.options, key: items})
 
     async def async_step_init(self, user_input=None) -> ConfigFlowResult:
-        choices = ["settings", "add_metric", "test_metric", "add_monitor"]
+        choices = ["settings", "add_metric", "test_metric", "add_monitor", "add_alert", "test_alert"]
+        if self.config_entry.options.get(CONF_ALERT_RULES):
+            choices.extend(["select_alert", "remove_alert"])
         if self.config_entry.options.get(CONF_CUSTOM_QUERIES):
             choices.append("select_metric")
             choices.append("remove_query")
@@ -248,6 +254,7 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
                 vol.In({
                     SEVERITY_SOURCE_DETECTED: "Grafana Loki detected severity (dashboard-compatible)",
                     SEVERITY_SOURCE_INDEXED: "Indexed level label (previous behavior)",
+                    SEVERITY_SOURCE_CANONICAL: "Grafana v1.9 canonical severity (indexed → detected → log marker)",
                 }),
             vol.Required(CONF_LEVEL_LABEL, default=opts.get(CONF_LEVEL_LABEL, DEFAULT_LEVEL_LABEL)): str,
             vol.Required(CONF_HOST_LABEL, default=opts.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL)): str,
@@ -515,3 +522,110 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         return self.async_show_form(step_id="remove_monitor", data_schema=vol.Schema({
             vol.Required(CONF_MONITOR_ID): vol.In({m["id"]: m["name"] for m in current})
         }))
+
+    def _alert_schema(self, current: dict | None = None) -> vol.Schema:
+        current = {**DEFAULT_RULE, **(current or {})}
+        fields = {
+            vol.Required("name", default=current.get("name", "")): str,
+            vol.Required("enabled", default=current["enabled"]): bool,
+            vol.Optional("host", default=current["host"]): str,
+            vol.Optional("source", default=current["source"]): str,
+            vol.Optional("service", default=current["service"]): str,
+            vol.Optional("program", default=current["program"]): str,
+            vol.Required("severity", default=current["severity"]): vol.In({
+                "all": "All levels", "errors": "High severity (emergency to error)",
+                "warnings": "Warnings", "emergency": "Emergency", "alert": "Alert",
+                "critical": "Critical", "fatal": "Fatal", "error": "Error", "warning": "Warning",
+                "notice": "Notice", "info": "Info", "debug": "Debug", "trace": "Trace", "unknown": "Unknown",
+            }),
+            vol.Optional("text", default=current["text"]): str,
+            vol.Optional("regex", default=current["regex"]): str,
+            vol.Required("threshold", default=current["threshold"]):
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=10000)),
+            vol.Required("window_minutes", default=current["window_minutes"]):
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+            vol.Required("cooldown_minutes", default=current["cooldown_minutes"]):
+                vol.All(vol.Coerce(int), vol.Range(min=0, max=10080)),
+            vol.Required("include_message", default=current["include_message"]): bool,
+        }
+        return vol.Schema(fields)
+
+    async def async_step_add_alert(self, user_input=None) -> ConfigFlowResult:
+        current = list(self.config_entry.options.get(CONF_ALERT_RULES, []))
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                new = clean_rule(user_input)
+                if len(current) >= MAX_ALERT_RULES or any(
+                    item["name"].casefold() == new["name"].casefold() for item in current
+                ):
+                    errors["base"] = "duplicate_or_limit_alert"
+                else:
+                    return self._save(CONF_ALERT_RULES, current + [{"id": uuid4().hex, **new}])
+            except (ValueError, TypeError):
+                errors["base"] = "invalid_alert"
+        return self.async_show_form(
+            step_id="add_alert", data_schema=self._alert_schema(user_input), errors=errors
+        )
+
+    async def async_step_select_alert(self, user_input=None) -> ConfigFlowResult:
+        current = self.config_entry.options.get(CONF_ALERT_RULES, [])
+        if not current:
+            return await self.async_step_init()
+        if user_input is not None:
+            self._editing_alert_id = user_input["rule_id"]
+            return await self.async_step_edit_alert()
+        return self.async_show_form(step_id="select_alert", data_schema=vol.Schema({
+            vol.Required("rule_id"): vol.In({r["id"]: r["name"] for r in current})
+        }))
+
+    async def async_step_edit_alert(self, user_input=None) -> ConfigFlowResult:
+        current = list(self.config_entry.options.get(CONF_ALERT_RULES, []))
+        previous = next((r for r in current if r["id"] == getattr(self, "_editing_alert_id", None)), None)
+        if previous is None:
+            return await self.async_step_init()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                updated = clean_rule(user_input)
+                if any(r["id"] != previous["id"] and r["name"].casefold() == updated["name"].casefold()
+                       for r in current):
+                    errors["base"] = "duplicate_or_limit_alert"
+                else:
+                    return self._save(CONF_ALERT_RULES, [
+                        {"id": previous["id"], **updated} if r["id"] == previous["id"] else r
+                        for r in current
+                    ])
+            except (TypeError, ValueError):
+                errors["base"] = "invalid_alert"
+        return self.async_show_form(step_id="edit_alert", data_schema=self._alert_schema(user_input or previous), errors=errors)
+
+    async def async_step_remove_alert(self, user_input=None) -> ConfigFlowResult:
+        current = list(self.config_entry.options.get(CONF_ALERT_RULES, []))
+        if not current:
+            return await self.async_step_init()
+        if user_input is not None:
+            return self._save(CONF_ALERT_RULES, [r for r in current if r["id"] != user_input["rule_id"]])
+        return self.async_show_form(step_id="remove_alert", data_schema=vol.Schema({
+            vol.Required("rule_id"): vol.In({r["id"]: r["name"] for r in current})
+        }))
+
+    async def async_step_test_alert(self, user_input=None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        count_text = "Not tested"
+        if user_input is not None:
+            try:
+                rule = clean_rule(user_input)
+                count = await test_alert_rule(
+                    self._client(), rule,
+                    self.config_entry.options.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL),
+                )
+                count_text = str(int(count))
+            except LokiAuthError:
+                errors["base"] = "invalid_auth"
+            except (LokiError, TypeError, ValueError):
+                errors["base"] = "invalid_alert"
+        return self.async_show_form(
+            step_id="test_alert", data_schema=self._alert_schema(user_input),
+            errors=errors, description_placeholders={"count": count_text},
+        )

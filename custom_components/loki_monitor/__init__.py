@@ -14,8 +14,10 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .api import LokiAuthError, LokiClient, LokiError
+from .alerts import LokiAlertEngine, CONF_ALERT_RULES
 from .const import CONF_QUERY, CONF_URL, CONF_VERIFY_SSL, DOMAIN
 from .coordinator import LokiCoordinator
 from .logic import flatten_streams
@@ -98,7 +100,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_get_clientsession(hass, verify_ssl=entry.data.get(CONF_VERIFY_SSL, True)),
         entry.data,
     )
-    coordinator = LokiCoordinator(hass, api, dict(entry.options))
+    rules = list(entry.options.get(CONF_ALERT_RULES, []))
+    engine = None
+    if rules:
+        engine = LokiAlertEngine(
+            hass, api, entry.entry_id,
+            Store(hass, 1, f"{DOMAIN}_alert_checkpoints_{entry.entry_id}", private=True),
+            host_label=entry.options.get("host_label", "host"),
+        )
+        await engine.async_initialize(rules)
+    coordinator = LokiCoordinator(hass, api, dict(entry.options), alerts=engine)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = LokiRuntimeData(api=api, coordinator=coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

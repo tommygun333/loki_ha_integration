@@ -51,7 +51,9 @@ def detected_level_selector(host_label: str, severity: str) -> str:
 
 def count_query(selector: str, window: str) -> str:
     """Create a single instant-vector count with a zero fallback."""
-    if window not in ("1h", "24h"):
+    if window not in ("1h", "24h") and not (
+        window.endswith("m") and window[:-1].isdigit() and 1 <= int(window[:-1]) <= 1440
+    ):
         raise ValueError("Unsupported count window")
     return f"sum(count_over_time({selector}[{window}])) or vector(0)"
 

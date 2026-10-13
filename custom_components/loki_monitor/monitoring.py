@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 
 from .logic import level_selector, validate_label_name
-from .const import SEVERITY_SOURCE_DETECTED, SEVERITY_SOURCE_INDEXED
+from .const import SEVERITY_SOURCE_DETECTED, SEVERITY_SOURCE_INDEXED, SEVERITY_SOURCE_CANONICAL
+from .viewer import CANONICAL_SEVERITY_TEMPLATE, SEVERITY_PATTERNS
 
 MAX_MONITORS = 12
 CONF_MONITORS = "monitors"
@@ -42,6 +43,11 @@ def monitor_selector(
     stream = [f"{host_label}={json.dumps(host)}"]
     if service:
         stream.append(f"{SERVICE_LABEL}={json.dumps(service)}")
+    if severity_source == SEVERITY_SOURCE_CANONICAL:
+        pattern = SEVERITY_PATTERNS["errors" if severity == "error" else "warnings"]
+        return ("{" + ",".join(stream) + "}"
+                + " | label_format severity=`" + CANONICAL_SEVERITY_TEMPLATE + "`"
+                + " | severity=~" + json.dumps(pattern))
     if severity_source == SEVERITY_SOURCE_DETECTED:
         # Preserve Loki detected_level classification used in the dashboard.
         expression = {"error": "(?i)(error|critical|fatal)", "warn": "(?i)warn"}[severity]

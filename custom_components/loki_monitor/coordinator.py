@@ -29,8 +29,12 @@ from .const import (
     DOMAIN,
     SEVERITY_SOURCE_DETECTED,
     SEVERITY_SOURCE_INDEXED,
+    SEVERITY_SOURCE_CANONICAL,
 )
 from .monitoring import CONF_MONITORS, monitor_selector
+from .alerts import CONF_ALERT_RULES
+from .viewer import CANONICAL_SEVERITY_TEMPLATE, SEVERITY_PATTERNS
+import json
 from .logic import (
     count_query,
     detected_level_selector,
@@ -45,7 +49,7 @@ _LOGGER = logging.getLogger(__name__)
 class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Query summary counts, newest error, labels and user metrics."""
 
-    def __init__(self, hass: HomeAssistant, api: LokiClient, options: dict[str, Any]) -> None:
+    def __init__(self, hass: HomeAssistant, api: LokiClient, options: dict[str, Any], alerts=None) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -55,6 +59,7 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
         )
         self.api = api
+        self.alerts = alerts
         self.options = options
         self._failing_queries: set[str] = set()
 
@@ -67,6 +72,13 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Grafana dashboard's built-in Errors/Warnings stat panels.
             error_selector = detected_level_selector(host_label, "error")
             warn_selector = detected_level_selector(host_label, "warn")
+        elif severity_source == SEVERITY_SOURCE_CANONICAL:
+            # Exact host/source/service/program "All" scope from Grafana v1.9.
+            scope = ("{" + host_label + '=~".+",source=~".*",'
+                     'service_name=~".*",syslog_identifier=~".*"}')
+            base = scope + " | label_format severity=`" + CANONICAL_SEVERITY_TEMPLATE + "`"
+            error_selector = base + " | severity=~" + json.dumps(SEVERITY_PATTERNS["errors"])
+            warn_selector = base + " | severity=~" + json.dumps(SEVERITY_PATTERNS["warnings"])
         elif severity_source == SEVERITY_SOURCE_INDEXED:
             error_selector = level_selector(
                 label, self.options.get(CONF_ERROR_LEVELS, DEFAULT_ERROR_LEVELS)
@@ -200,4 +212,18 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result.setdefault(key, None)
         result["failed_queries"] = sorted(failures)
         result["failed_query_count"] = len(failures)
+        if self.alerts is not None:
+            try:
+                result.update(await self.alerts.async_check(self.options.get(CONF_ALERT_RULES, [])))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Alert processing must never disable health and count sensors.
+                _LOGGER.exception("Loki alert processor failed")
+                result["alert_rule_failures"] = [
+                    rule["id"] for rule in self.options.get(CONF_ALERT_RULES, [])
+                    if rule.get("enabled", True)
+                ]
+                result["alerts_triggered"] = 0
+        result["alert_rule_failures_count"] = len(result.get("alert_rule_failures", []))
         return result

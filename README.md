@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.3.2 — HACS custom repository**
+**Version 0.4.0 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -29,11 +29,13 @@ Updates: Until the first GitHub release, HACS tracks commits on the default bran
 - **Per-host/service monitors**: choose a host and optional `service_name`, then get 1h/24h warning/error counts for that scope.
 - **Automatic entity registry cleanup**: deleting a custom metric or host/service monitor also removes its obsolete sensor entities during the next integration setup, including older orphaned entries. No extra reload mechanism is added.
 - **Isolated query failures**: individual broken queries do not take unrelated sensors offline; a diagnostic **Query failures** sensor lists affected query IDs. A full Loki outage remains visible.
+- **Rule-based Loki alerts**: configurable threshold/window/cooldown matching with stored checkpoints, event-driven Home Assistant automations, and safe dry-run query previews.
+- **Optional canonical severity for counters**: Grafana v1.9 label and inline-marker classification for built-in and host/service metrics. Existing severity settings remain unchanged during upgrade.
 - **Native Loki log viewer**: a responsive Lovelace card backed by an admin-only WebSocket API, cascading Host → Source → Service → Program suggestions, Grafana v1.9 canonical severity, IP-host suggestion hiding, configurable labels, and older-page navigation.
 - `loki_monitor.query_logs` response-returning Home Assistant action for bounded, on-demand log retrieval.
 - Polling 60–3600 seconds (default 120) and multiple Loki instances.
 
-Not yet implemented: an event/rule engine, live tailing, or Grafana deep links. This is an early prototype; please report bugs in the repository issue tracker.
+Not yet implemented: live tailing or Grafana deep links for alert events. This is an early prototype; please report bugs in the repository issue tracker.
 
 ## Configuration
 
@@ -86,12 +88,50 @@ To modify an existing monitor, use **Edit host/service monitor**. Its UUID and s
 
 If a single built-in count, monitor, custom query, or label lookup fails, only affected data is marked unavailable; other sensors continue updating. When **every** query fails, the coordinator reports an outage and the `API available` binary sensor goes Off. Auth failures still trigger the reauthentication flow. Known-host counts refer to discovered Loki label values, not an active host heartbeat.
 
+### Rule-based alerts and Home Assistant events (v0.4)
+
+In **Settings → Devices & services → Grafana Loki Monitor → Configure**, use:
+
+- **Add alert rule**: a named, enabled/disabled rule using the same Grafana v1.9 canonical severity classifier as the log viewer. Scope by exact host, source, service or program; filter by severity, contained text, and/or log-line regex. Set **minimum matching logs**, **time window in minutes**, and **cooldown minutes**. `3 matches / 5 minutes / 15-minute cooldown` is a good initial configuration.
+- **Edit alert rule**: retain its rule ID and persisted checkpoint.
+- **Remove alert rule**: delete the definition; its saved checkpoint is pruned when other rules are next initialized.
+- **Test alert rule**: preview the number of matching entries in its time window. **This never fires an event or saves a rule.**
+
+The engine shares the integration's existing polling interval (default **120 seconds**, no new scheduler). On a poll it checks the newest matching log, and **only if a newer match exists** checks whether the rolling window contains at least the configured threshold. It fires an HA bus event of type **`loki_monitor_alert`**, and remembers the seen timestamp and cooldown in private Home Assistant storage. This avoids triggering on the same logs repeatedly or replaying old entries after a restart. **New rules start from creation time:** their existing matching logs are ignored until a new matching entry arrives. Choose a rule window at least as long as the polling interval; a very short window can miss activity between polls. Longer outages can also miss alerts that fall outside the rule window. The engine is deliberately best-effort, not a guaranteed-delivery SIEM.
+
+The event contains `entry_id`, `rule_id`, `name`, `severity`, `host`, `service`, `source`, `program`, `count`, `threshold`, `window_minutes`, and `last_match_ns`. **`message` is only included if you opt into "Include last matching log line"**, since logs may contain tokens or private content. The engine writes the checkpoint **before** emitting an event to minimize duplicates; this chooses at-most-once delivery, so a shutdown at exactly that moment can lose an event. Alert rule query failures are isolated from other sensors and surfaced through the diagnostic **Alert rule failures** sensor (with `failed_rules` attribute). There is a maximum of **12 rules per Loki connection**, with three concurrent rule queries.
+
+Example Home Assistant event-trigger automation (replace the notification action with your phone's actual notify entity/service):
+
+```yaml
+alias: Loki - critical log notifications
+triggers:
+  - trigger: event
+    event_type: loki_monitor_alert
+conditions: []
+actions:
+  - action: notify.notify
+    data:
+      title: "Loki alert: {{ trigger.event.data.name }}"
+      message: >-
+        {{ trigger.event.data.count }} matching log entries in
+        {{ trigger.event.data.window_minutes }} minutes.
+        Host: {{ trigger.event.data.host or 'all' }}.
+mode: queued
+```
+
+If you want different actions for different rules, add an event `event_data` match on `rule_id`, or use a template condition. An automation does not have to be created until you actually want notifications. **Creating rules by itself never sends notifications.**
+
+### Canonical severity for metrics (v0.4)
+
+Under **Configure → Polling and label mapping → Built-in severity counting mode**, select **Grafana v1.9 canonical severity** to opt into the same classification as the log viewer for your built-in 1h/24h counters, Last Error sensor, and each host/service monitor. The Grafana v1.9 classifier prioritizes the indexed `level`, then `detected_level`, then explicit line markers such as `[emerg]` and `[fatal]`. The older **Detected** and **Indexed** options remain available; **v0.4 keeps each existing connection's previous setting until you change it**. This is more expensive in Loki because each count needs to evaluate a line-formatting pipeline; start with your current polling interval and check resource use before adding many monitors.
+
 ### Native log viewer (v0.3.2)
 
 The viewer is a **read-only Lovelace custom card** supplied by the integration. HACS installs the JavaScript, but Home Assistant needs its resource registered once.
 
-1. Install/update v0.3.2 in HACS and restart Home Assistant Core.
-2. In **Settings → Dashboards → Resources**, create/update a **JavaScript module** resource with URL `/loki_monitor/loki-log-viewer-card.js?v=0.3.2` (update the previous `?v=0.3.0` to clear frontend cache).
+1. Install/update v0.4.0 in HACS and restart Home Assistant Core.
+2. Keep your existing **JavaScript module** resource URL `/loki_monitor/loki-log-viewer-card.js?v=0.3.2` unchanged; the frontend file was not modified in v0.4.0.
 3. Add a **Manual card**. This is a full example of the supported settings:
 
 ```yaml
@@ -168,6 +208,8 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
 ## Changelog
+
+- **0.4.0:** Grafana v1.9 canonical severity as an opt-in mode for existing counters and host/service monitors; bounded alert rules with add/edit/remove/test flows, Loki newest-entry checkpoints, rolling-window thresholds, persistent cooldown state, HA event `loki_monitor_alert`, private optional log message, and failure diagnostics. No new reload mechanism; v0.3.2 viewer JavaScript unchanged.
 
 - **0.3.2:** Mobile-friendly searchable multi-select popup filters for host/source/service/program. Backward-compatible string/list WebSocket schemas, exact escaped multi-value LogQL matchers, cascading contextual suggestions and no changes to existing metrics.
 
