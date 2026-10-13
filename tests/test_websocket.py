@@ -55,6 +55,7 @@ def websocket_module(monkeypatch):
     vol.Coerce=lambda typ:typ
     vol.Range=lambda **kw:kw
     vol.All=lambda *args:args
+    vol.Any=lambda *args:args
     monkeypatch.setitem(sys.modules,"probatio",vol)
     ha = ModuleType("homeassistant")
     ha.__path__=[]
@@ -180,3 +181,25 @@ async def test_filter_schema_invalid_label_is_rejected(websocket_module):
     await websocket_module.websocket_filters(hass, conn, {"id": 1, "source_label": "host"})
     assert conn.errors[0][1] == "invalid_filters"
     assert not apis[0].label_requests
+
+
+@pytest.mark.asyncio
+async def test_multiselect_websocket_query_and_contextual_suggestions(websocket_module):
+    hass, apis = make_hass()
+    conn = FakeConnection()
+    await websocket_module.websocket_filters(hass, conn, {
+        "id": 31, "host": ["CoreELEC", "pve"], "source": ["journal", "docker"],
+        "service": ["kodi", "nginx"], "minutes": 60, "cascading": True,
+    })
+    assert conn.errors == []
+    reqs = apis[0].label_requests
+    assert reqs[1][2] == '{host=~"^(?:CoreELEC|pve)$"}'
+    assert reqs[2][2] == '{host=~"^(?:CoreELEC|pve)$",source=~"^(?:journal|docker)$"}'
+    await websocket_module.websocket_query_logs(hass, conn, {
+        "id": 32, "entry_id": "e0", "host": ["CoreELEC", "pve"],
+        "source": ["journal", "docker"], "service": [], "program": [],
+        "severity": "warnings", "text": "", "regex": "", "minutes": 60, "limit": 25,
+    })
+    assert conn.errors == []
+    assert 'host=~"^(?:CoreELEC|pve)$"' in apis[0].requests[0][0]
+    assert 'source=~"^(?:journal|docker)$"' in apis[0].requests[0][0]

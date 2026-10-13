@@ -18,6 +18,8 @@ class LokiLogViewerCard extends HTMLElement {
     this._hideIpHosts = config.hide_ip_hosts !== false;
     this._hiddenHosts = Array.isArray(config.hidden_hosts) ? config.hidden_hosts.map(String) : [];
     this._suggestionRevision = 0;
+    this._suggestions = { host: [], source: [], service: [], program: [] };
+    this._picker = null;
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
       this._renderShell();
@@ -54,8 +56,8 @@ class LokiLogViewerCard extends HTMLElement {
   _setDefaultFilters() {
     const c = this._config;
     this._filters = {
-      host: String(c.host || ""), source: String(c.source || ""),
-      service: String(c.service || ""), program: String(c.program || ""),
+      host: this._initialSelection(c.host), source: this._initialSelection(c.source),
+      service: this._initialSelection(c.service), program: this._initialSelection(c.program),
       severity: String(c.severity || "all"), severity_mode: String(c.severity_mode || "canonical"),
       text: String(c.text || ""),
       regex: String(c.regex || ""),
@@ -70,6 +72,13 @@ class LokiLogViewerCard extends HTMLElement {
     this._revision = (this._revision || 0) + 1;
   }
 
+  // An old scalar YAML value remains valid; arrays enable multi-selection.
+  _initialSelection(value) {
+    const items = Array.isArray(value) ? value : (value ? [value] : []);
+    return [...new Set(items.filter(item => typeof item === "string")
+      .map(item => item.trim()).filter(item => item && item.length <= 128))].slice(0, 24);
+  }
+
   _renderShell() {
     // Only static markup. All Loki text is later inserted with textContent.
     this.shadowRoot.innerHTML = `
@@ -78,6 +87,26 @@ class LokiLogViewerCard extends HTMLElement {
         ha-card { display:block; background:var(--card-background-color,var(--ha-card-background,var(--secondary-background-color))); border-radius:var(--ha-card-border-radius,12px); box-shadow:var(--ha-card-box-shadow,none); padding:16px; }
         .head { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:14px; }
         .head a { font-size:12px; color:var(--primary-color); }
+        .multi-trigger { display:flex; width:100%; min-height:40px; padding:8px 10px; margin-top:4px; justify-content:space-between; align-items:center; gap:8px; text-align:left; border-radius:7px; background:var(--card-background-color,var(--primary-background-color)); }
+        .multi-trigger .selected { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+        .multi-trigger .chevron { color:var(--secondary-text-color); font-size:14px; }
+        .multi-trigger:focus-visible { outline:2px solid var(--primary-color); outline-offset:1px; }
+        .picker { padding:0; color:var(--primary-text-color); background:var(--card-background-color,var(--primary-background-color)); border:1px solid var(--divider-color,#777); border-radius:15px; width:min(440px,calc(100vw - 24px)); max-height:min(82dvh,760px); box-shadow:0 12px 50px #0006; }
+        .picker::backdrop { background:rgba(0,0,0,.56); }
+        .picker-inner { display:flex; flex-direction:column; padding:16px; gap:12px; max-height:min(82dvh,760px); box-sizing:border-box; }
+        .picker-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+        .picker-top h3 { font-size:17px; font-weight:600; margin:0; }
+        .picker-search { width:100%; min-height:44px; font-size:15px; margin:0; }
+        .picker-items { flex:1; min-height:90px; overflow:auto; overscroll-behavior:contain; padding:2px; }
+        .picker-choice { display:flex; align-items:center; gap:12px; padding:9px 6px; min-height:44px; box-sizing:border-box; border-bottom:1px solid var(--divider-color,#9994); font-size:14px; cursor:pointer; overflow-wrap:anywhere; }
+        .picker-choice input { width:19px; height:19px; min-height:19px; margin:0; flex-shrink:0; accent-color:var(--primary-color); }
+        .picker-choice span { flex:1; min-width:0; }
+        .picker-footer { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+        .picker-hint { font-size:12px; color:var(--secondary-text-color); }
+        .picker-custom { display:flex; gap:8px; }
+        .picker-custom input { margin:0; flex:1; min-width:0; min-height:42px; }
+        .picker-custom button { flex-shrink:0; }
+        @media(max-width:580px) { .picker { width:100vw; max-width:100vw; max-height:90dvh; margin:auto 0 0; border-radius:16px 16px 0 0; } .picker-inner { max-height:90dvh; padding:18px 16px max(16px,env(safe-area-inset-bottom)); } .picker-search { font-size:16px; } }
         h2 { font-size:18px; margin:0; font-weight:600; }
         .sub { font-size:12px; color:var(--secondary-text-color); }
         .filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px; align-items:end; }
@@ -109,10 +138,10 @@ class LokiLogViewerCard extends HTMLElement {
         <section class="filters">
           <label>Server<select id="entry"></select></label>
           <label>Time range<select id="minutes"><option value="15">15 minutes</option><option value="60">1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option><option value="10080">7 days</option></select></label>
-          <label>Host<input id="host" list="hosts" maxlength="128" placeholder="All hosts"></label><datalist id="hosts"></datalist>
-          <label>Service<input id="service" list="services" maxlength="128" placeholder="All services"></label><datalist id="services"></datalist>
-          <label>Source<input id="source" list="sources" maxlength="128" placeholder="All sources"></label><datalist id="sources"></datalist>
-          <label>Program<input id="program" list="programs" maxlength="128" placeholder="All programs"></label><datalist id="programs"></datalist>
+          <label>Host<button type="button" class="multi-trigger" id="host" aria-haspopup="dialog"><span class="selected">All hosts</span><span class="chevron" aria-hidden="true">▾</span></button></label>
+          <label>Source<button type="button" class="multi-trigger" id="source" aria-haspopup="dialog"><span class="selected">All sources</span><span class="chevron" aria-hidden="true">▾</span></button></label>
+          <label>Service<button type="button" class="multi-trigger" id="service" aria-haspopup="dialog"><span class="selected">All services</span><span class="chevron" aria-hidden="true">▾</span></button></label>
+          <label>Program<button type="button" class="multi-trigger" id="program" aria-haspopup="dialog"><span class="selected">All programs</span><span class="chevron" aria-hidden="true">▾</span></button></label>
           <label>Severity<select id="severity"><option value="all">All levels</option><option value="errors">High severity (emergency → error)</option><option value="warnings">Warnings</option><option value="emergency">Emergency</option><option value="alert">Alert</option><option value="critical">Critical</option><option value="fatal">Fatal</option><option value="error">Error</option><option value="warning">Warning</option><option value="notice">Notice</option><option value="info">Info</option><option value="debug">Debug</option><option value="trace">Trace</option><option value="unknown">Unknown</option></select></label>
           <label>Severity classification<select id="severity_mode"><option value="canonical">Grafana v1.9 (indexed → detected → marker)</option><option value="detected">Detected level (legacy)</option></select></label>
           <label>Page size<select id="limit"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
@@ -123,19 +152,39 @@ class LokiLogViewerCard extends HTMLElement {
         <section class="loglist" id="loglist" aria-label="Loki log entries"></section>
         <div class="foot"><button id="older" hidden>Load older logs</button></div>
       </ha-card>
+      <dialog id="filter-picker" class="picker" aria-label="Choose filter values">
+        <div class="picker-inner">
+          <div class="picker-top"><h3 id="picker-title">Select values</h3><button id="picker-close" type="button" aria-label="Close filter">✕</button></div>
+          <input id="picker-search" class="picker-search" type="search" placeholder="Search options" aria-label="Search options" autocomplete="off">
+          <span class="picker-hint" id="picker-count">All selected</span>
+          <div id="picker-items" class="picker-items" role="group" aria-label="Available values"></div>
+          <div class="picker-custom"><input id="picker-custom" type="text" maxlength="128" placeholder="Custom exact value" aria-label="Custom exact value"><button id="picker-add-custom" type="button">Add</button></div>
+          <span id="picker-error" class="picker-hint" role="status"></span>
+          <div class="picker-footer"><button id="picker-clear" type="button">Clear / All</button><button id="picker-all-visible" type="button">Select shown</button><button id="picker-cancel" type="button">Cancel</button><button id="picker-apply" class="primary" type="button">Apply</button></div>
+        </div>
+      </dialog>
     `;
     this.shadowRoot.getElementById("apply").addEventListener("click", () => this._query(false));
     this.shadowRoot.getElementById("older").addEventListener("click", () => this._query(true));
-    for (const [index, key] of ["host", "source", "service", "program"].entries()) {
-      this.shadowRoot.getElementById(key).addEventListener("change", async () => {
-        if (this._cascadingFilters) {
-          for (const downstream of ["host", "source", "service", "program"].slice(index + 1)) {
-            this.shadowRoot.getElementById(downstream).value = "";
-          }
-        }
-        await this._loadSuggestions();
-      });
+    for (const key of ["host", "source", "service", "program"]) {
+      this.shadowRoot.getElementById(key).addEventListener("click", () => this._openPicker(key));
     }
+    this.shadowRoot.getElementById("picker-search").addEventListener("input", () => this._renderPickerChoices());
+    this.shadowRoot.getElementById("picker-apply").addEventListener("click", () => this._applyPicker());
+    for (const id of ["picker-close", "picker-cancel"]) {
+      this.shadowRoot.getElementById(id).addEventListener("click", () => this.shadowRoot.getElementById("filter-picker").close());
+    }
+    this.shadowRoot.getElementById("picker-clear").addEventListener("click", () => {
+      this._picker.selected.clear(); this._renderPickerChoices();
+    });
+    this.shadowRoot.getElementById("picker-all-visible").addEventListener("click", () => this._selectVisible());
+    this.shadowRoot.getElementById("picker-add-custom").addEventListener("click", () => this._addCustomSelection());
+    this.shadowRoot.getElementById("picker-custom").addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); this._addCustomSelection(); }
+    });
+    this.shadowRoot.getElementById("filter-picker").addEventListener("click", e => {
+      if (e.target === e.currentTarget) e.currentTarget.close();
+    });
     this.shadowRoot.getElementById("minutes").addEventListener("change", () => this._loadSuggestions());
     this.shadowRoot.getElementById("entry").addEventListener("change", async () => {
       this._activeEntryId = this.shadowRoot.getElementById("entry").value;
@@ -153,16 +202,130 @@ class LokiLogViewerCard extends HTMLElement {
         }
       } catch { /* Ignore invalid optional Grafana URL. */ }
     }
-    for (const control of this.shadowRoot.querySelectorAll("input")) {
-      control.addEventListener("keydown", (e) => { if (e.key === "Enter") this._query(false); });
+    for (const key of ["text", "regex"]) {
+      this.shadowRoot.getElementById(key).addEventListener("keydown", e => {
+        if (e.key === "Enter") this._query(false);
+      });
     }
   }
 
   _populateControls() {
     for (const [key, value] of Object.entries(this._filters)) {
+      if (Array.isArray(value)) continue;
       const control = this.shadowRoot.getElementById(key);
       if (control) control.value = String(value);
     }
+    this._updateSelectionButtons();
+  }
+
+  _updateSelectionButtons() {
+    for (const key of ["host", "source", "service", "program"]) {
+      const selected = this._filters[key];
+      const name = {host:"hosts",source:"sources",service:"services",program:"programs"}[key];
+      const text = selected.length === 0 ? `All ${name}` :
+        selected.length === 1 ? selected[0] : `${selected.length} selected`;
+      const button = this.shadowRoot.getElementById(key);
+      button.querySelector(".selected").textContent = text;
+      button.title = selected.join(", ") || `All ${name}`;
+      button.setAttribute("aria-label", `${key}: ${text}`);
+    }
+  }
+
+  _openPicker(key) {
+    const dialog = this.shadowRoot.getElementById("filter-picker");
+    if (dialog.open) dialog.close();
+    this._picker = { key, selected: new Set(this._filters[key]) };
+    this.shadowRoot.getElementById("picker-title").textContent = `Select ${key} (multiple)`;
+    this.shadowRoot.getElementById("picker-search").value = "";
+    this.shadowRoot.getElementById("picker-custom").value = "";
+    this.shadowRoot.getElementById("picker-error").textContent = "";
+    this._renderPickerChoices();
+    dialog.showModal();
+    this.shadowRoot.getElementById("picker-search").focus();
+  }
+
+  _pickerOptions() {
+    if (!this._picker) return [];
+    return [...new Set([...(this._suggestions[this._picker.key] || []), ...this._picker.selected])].sort(
+      (a,b) => a.localeCompare(b, undefined, {sensitivity:"base"})
+    );
+  }
+
+  _visiblePickerOptions() {
+    const search = this.shadowRoot.getElementById("picker-search").value.toLocaleLowerCase().trim();
+    return this._pickerOptions().filter(value => value.toLocaleLowerCase().includes(search));
+  }
+
+  _updatePickerCount() {
+    const count = this._picker.selected.size;
+    this.shadowRoot.getElementById("picker-count").textContent = count ? `${count} selected · max 24` : "All (no restrictions)";
+  }
+
+  _renderPickerChoices() {
+    if (!this._picker) return;
+    const list = this.shadowRoot.getElementById("picker-items");
+    list.replaceChildren();
+    for (const value of this._visiblePickerOptions()) {
+      const choice = document.createElement("label"); choice.className = "picker-choice";
+      const check = document.createElement("input"); check.type = "checkbox";
+      check.checked = this._picker.selected.has(value);
+      const name = document.createElement("span"); name.textContent = value;
+      check.addEventListener("change", () => {
+        if (check.checked && this._picker.selected.size >= 24) {
+          check.checked = false;
+          this.shadowRoot.getElementById("picker-error").textContent = "Maximum 24 values per filter";
+          return;
+        }
+        if (check.checked) this._picker.selected.add(value);
+        else this._picker.selected.delete(value);
+        this._updatePickerCount();
+      });
+      choice.append(check,name); list.appendChild(choice);
+    }
+    if (!list.childElementCount) {
+      const empty = document.createElement("div"); empty.className = "empty";
+      empty.textContent = "No matching suggestions · you can add an exact value below";
+      list.appendChild(empty);
+    }
+    this._updatePickerCount();
+  }
+
+  _selectVisible() {
+    for (const value of this._visiblePickerOptions()) {
+      if (this._picker.selected.size >= 24) break;
+      this._picker.selected.add(value);
+    }
+    this._renderPickerChoices();
+  }
+
+  _addCustomSelection() {
+    const field = this.shadowRoot.getElementById("picker-custom");
+    const value = field.value.trim();
+    const error = this.shadowRoot.getElementById("picker-error");
+    error.textContent = "";
+    if (!value || value.length > 128 || /[\r\n\0]/.test(value)) {
+      error.textContent = "Enter an exact value, up to 128 characters"; return;
+    }
+    if (!this._picker.selected.has(value) && this._picker.selected.size >= 24) {
+      error.textContent = "Maximum 24 values per filter"; return;
+    }
+    this._picker.selected.add(value); field.value = "";
+    this._renderPickerChoices();
+  }
+
+  async _applyPicker() {
+    const {key, selected} = this._picker;
+    const next = [...selected];
+    const previous = this._filters[key];
+    const changed = next.length !== previous.length || next.some(v => !previous.includes(v));
+    this._filters[key] = next;
+    if (changed && this._cascadingFilters) {
+      const keys = ["host", "source", "service", "program"];
+      for (const downstream of keys.slice(keys.indexOf(key)+1)) this._filters[downstream] = [];
+    }
+    this.shadowRoot.getElementById("filter-picker").close();
+    this._updateSelectionButtons();
+    if (changed) await this._loadSuggestions();
   }
 
   async _initialize() {
@@ -216,25 +379,25 @@ class LokiLogViewerCard extends HTMLElement {
       });
       if (id !== this._activeEntryId || revision !== this._suggestionRevision) return;
       const options = response.filters || {};
-      for (const [key, listId] of [["host","hosts"],["source","sources"],["service","services"],["program","programs"]]) {
-        const list = this.shadowRoot.getElementById(listId);
-        list.replaceChildren();
-        const filtered = (options[key] || []).filter(value =>
+      for (const key of ["host", "source", "service", "program"]) {
+        this._suggestions[key] = (options[key] || []).filter(value =>
           key !== "host" || (!this._hiddenHosts.includes(value) &&
           (!this._hideIpHosts || !this._isIpHost(value)))
         );
-        for (const value of filtered) {
-          const element = document.createElement("option");
-          element.value = value;
-          list.appendChild(element);
-        }
+      }
+      // Keep a currently open picker synchronized with the latest suggestions.
+      if (this._picker && this.shadowRoot.getElementById("filter-picker").open) {
+        this._renderPickerChoices();
       }
     } catch { /* Suggestions are optional; querying logs remains available. */ }
   }
 
   _readFilters() {
     const values = {};
-    for (const key of ["host","service","source","program","severity","severity_mode","text","regex","minutes","limit"]) {
+    for (const key of ["host", "service", "source", "program"]) {
+      values[key] = [...this._filters[key]];
+    }
+    for (const key of ["severity", "severity_mode", "text", "regex", "minutes", "limit"]) {
       values[key] = this.shadowRoot.getElementById(key).value;
     }
     values.minutes = Number(values.minutes);

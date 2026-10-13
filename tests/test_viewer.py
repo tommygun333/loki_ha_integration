@@ -127,3 +127,48 @@ def test_card_supports_cascading_hidden_hosts_and_label_maps():
     assert 'this._labelMap' in code
     assert '_suggestionRevision' in code
     assert 'labels.severity' in code
+
+
+def test_multiselect_stream_matchers_are_exact_and_escaped():
+    """Two label selections are OR, but metacharacters are literal."""
+    import re
+    host = ["CoreELEC", "pve"]
+    service = ["npm/foo.bar", 'x"} | json |~ ".*']
+    query = build_viewer_query(host=host, source=["journal", "docker"], service=service)
+    assert 'host=~"^(?:CoreELEC|pve)$"' in query
+    assert 'source=~"^(?:journal|docker)$"' in query
+    expected = "^(?:" + "|".join(re.escape(v) for v in service) + ")$"
+    assert f'service_name=~{json.dumps(expected)}' in query
+    assert query.count(' | label_format severity=`') == 1
+    assert build_viewer_query(host=["CoreELEC"]).startswith('{host="CoreELEC"}')
+    assert build_viewer_query(host=[]).startswith('{host=~".+"}')
+
+
+def test_multiselect_cascade_scopes_and_legacy_scalars():
+    from loki_monitor.viewer import build_filter_scopes
+    scopes = build_filter_scopes(
+        host=["CoreELEC", "pve"], source=["journal", "docker"], service=["kodi", "nginx"]
+    )
+    assert scopes["source"] == '{host=~"^(?:CoreELEC|pve)$"}'
+    assert scopes["service"] == '{host=~"^(?:CoreELEC|pve)$",source=~"^(?:journal|docker)$"}'
+    assert scopes["program"] == '{host=~"^(?:CoreELEC|pve)$",source=~"^(?:journal|docker)$",service_name=~"^(?:kodi|nginx)$"}'
+    assert all(value == '{host=~".+"}' for value in build_filter_scopes(
+        host=["CoreELEC", "pve"], source="journal", cascading=False
+    ).values())
+
+
+@pytest.mark.parametrize("bad", [
+    [""], ["x\nfoo"], [123], ["a" * 129], ["x"] * 25, 17, {"arbitrary": "object"},
+])
+def test_multiselect_input_is_bounded_and_typed(bad):
+    with pytest.raises(ViewerInputError):
+        build_viewer_query(host=bad)
+    with pytest.raises(ViewerInputError):
+        from loki_monitor.viewer import build_filter_scopes
+        build_filter_scopes(source=bad)
+
+
+def test_multiselect_deduplicates_values():
+    from loki_monitor.viewer import normalize_filter_values
+    assert normalize_filter_values(["CoreELEC", "CoreELEC", "pve"]) == ["CoreELEC", "pve"]
+    assert normalize_filter_values("CoreELEC") == ["CoreELEC"]

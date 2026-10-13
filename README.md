@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.3.1 — HACS custom repository**
+**Version 0.3.2 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -86,12 +86,12 @@ To modify an existing monitor, use **Edit host/service monitor**. Its UUID and s
 
 If a single built-in count, monitor, custom query, or label lookup fails, only affected data is marked unavailable; other sensors continue updating. When **every** query fails, the coordinator reports an outage and the `API available` binary sensor goes Off. Auth failures still trigger the reauthentication flow. Known-host counts refer to discovered Loki label values, not an active host heartbeat.
 
-### Native log viewer (v0.3.1)
+### Native log viewer (v0.3.2)
 
 The viewer is a **read-only Lovelace custom card** supplied by the integration. HACS installs the JavaScript, but Home Assistant needs its resource registered once.
 
-1. Install/update v0.3.1 in HACS and restart Home Assistant Core.
-2. In **Settings → Dashboards → Resources**, create/update a **JavaScript module** resource with URL `/loki_monitor/loki-log-viewer-card.js?v=0.3.1` (update the previous `?v=0.3.0` to clear frontend cache).
+1. Install/update v0.3.2 in HACS and restart Home Assistant Core.
+2. In **Settings → Dashboards → Resources**, create/update a **JavaScript module** resource with URL `/loki_monitor/loki-log-viewer-card.js?v=0.3.2` (update the previous `?v=0.3.0` to clear frontend cache).
 3. Add a **Manual card**. This is a full example of the supported settings:
 
 ```yaml
@@ -120,7 +120,9 @@ grafana_url: https://grafana.home
 
 **Grafana v1.9 parity:** The default `canonical` mode copies the exact `label_format severity` logic from **Homelab Logs / Loki v1.9**. It classifies indexed `level` before `detected_level`, then recognizes explicit line markers such as `[emerg]`, `[fatal]`, `[warn]`; normalizes aliases (`crit`, `err`, `4`, etc.); and exposes Emergency, Alert, Critical, Fatal, Error, Warning, Notice, Info, Debug, Trace, and Unknown as filter levels. The **High severity** preset groups Emergency through Error, matching Grafana. Choose `severity_mode: detected` for the older, simpler `detected_level` behavior. This changes the viewer only; existing built-in HA metric sensors keep their current query configuration.
 
-**Cascading filters:** With `cascading_filters: true` (default), the suggestions mirror Grafana's Host → Source → Service → Program variable chain using Loki's scoped label-values API. Changing an upstream input clears selections below it and reloads the relevant suggestions. `false` fetches independent/global suggestions. Press **Search / refresh** to fetch logs; filter browsing alone doesn't continuously query log lines. Suggestions use the selected time range; Loki may internally use a wider indexing window.
+**Mobile-friendly multi-select filters (v0.3.2):** Host, Source, Service, and Program now use touch-friendly pop-up selectors rather than browser datalists. Search within the list, select up to 24 exact values per field (matching any of those values), use Clear / All, or add a custom exact value. Legacy scalar YAML defaults (e.g. `host: CoreELEC`) remain supported; you can also write `host: [CoreELEC, proxmox]` or `service: [kodi, systemd]`. The pop-up is a modal bottom sheet on phones, with a Cancel and Apply workflow. Time range, severity, and the other single-value settings retain their browser-native select controls. Multi-value LogQL selectors are escaped and anchored by the backend, not interpreted as user-authored regex.
+
+**Cascading filters:** With `cascading_filters: true` (default), the suggestions mirror Grafana's Host → Source → Service → Program variable chain using Loki's scoped label-values API. Applying a changed upstream selection clears selections below it and reloads the relevant suggestions. `false` fetches independent/global suggestions. Press **Search / refresh** to fetch logs; filter browsing alone doesn't continuously query log lines. Suggestions use the selected time range; Loki may internally use a wider indexing window.
 
 **Host cleanup:** `hide_ip_hosts: true` (default) hides IPv4/IPv6-looking values from the *host suggestion list*, and `hidden_hosts` hides any specified exact hostnames. Neither setting deletes Loki data or silently filters all log rows. Manually entered IP hosts remain searchable. If addresses are being indexed as hosts, investigate their original Alloy/syslog label mapping; the viewer doesn't generate them.
 
@@ -166,6 +168,8 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
 ## Changelog
+
+- **0.3.2:** Mobile-friendly searchable multi-select popup filters for host/source/service/program. Backward-compatible string/list WebSocket schemas, exact escaped multi-value LogQL matchers, cascading contextual suggestions and no changes to existing metrics.
 
 - **0.3.1:** Align native viewer with Grafana Homelab Logs / Loki v1.9 canonical severity, implement scoped cascading host/source/service/program suggestions, hide IP hosts from suggestions, make label mapping/cascade/severity configurable, and provide a dashboard-export profile converter. Retain v0.2.2 entity cleanup and options reload behavior.
 

@@ -17,6 +17,7 @@ MAX_WINDOW_MINUTES = 7 * 24 * 60
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 50
 MAX_FIELD_LENGTH = 128
+MAX_FILTER_SELECTIONS = 24
 MAX_TEXT_LENGTH = 256
 MAX_REGEX_LENGTH = 256
 MAX_LOGQL_LENGTH = 8192
@@ -57,13 +58,44 @@ def _checked_text(value: str, max_length: int) -> str:
     return value.strip()
 
 
+def normalize_filter_values(value: str | list[str]) -> list[str]:
+    """Accept old scalar filters and new multi-select arrays without coercion.
+
+    Every selection is an exact Loki label value; no regex syntax is accepted
+    from the caller. The total number of selected values is bounded.
+    """
+    if isinstance(value, str):
+        value = [value] if value.strip() else []
+    if not isinstance(value, list) or len(value) > MAX_FILTER_SELECTIONS:
+        raise ViewerInputError("Invalid number of filter selections")
+    results = []
+    for item in value:
+        checked = _checked_text(item, MAX_FIELD_LENGTH)
+        if not checked:
+            raise ViewerInputError("Empty filter selection")
+        if checked not in results:
+            results.append(checked)
+    return results
+
+
+def label_matcher(label: str, selection: list[str], *, require_host: bool = False) -> str | None:
+    """Produce exact equality for one value, escaped anchored regex for many."""
+    if not selection:
+        return f'{label}=~".+"' if require_host else None
+    if len(selection) == 1:
+        return f'{label}={json.dumps(selection[0])}'
+    # Loki RE2 label regexes are fully anchored; anchor explicitly for clarity.
+    pattern = "^(?:" + "|".join(re.escape(item) for item in selection) + ")$"
+    return f"{label}=~{json.dumps(pattern)}"
+
+
 def build_viewer_query(
     *,
     host_label: str = "host",
-    host: str = "",
-    source: str = "",
-    service: str = "",
-    program: str = "",
+    host: str | list[str] = "",
+    source: str | list[str] = "",
+    service: str | list[str] = "",
+    program: str | list[str] = "",
     severity: str = "all",
     text: str = "",
     regex: str = "",
@@ -90,18 +122,16 @@ def build_viewer_query(
     if len({host_label, source_label, service_label, program_label}) != 4:
         raise ViewerInputError("Filter labels must be distinct")
     fields = {
-        host_label: _checked_text(host, MAX_FIELD_LENGTH),
-        source_label: _checked_text(source, MAX_FIELD_LENGTH),
-        service_label: _checked_text(service, MAX_FIELD_LENGTH),
-        program_label: _checked_text(program, MAX_FIELD_LENGTH),
+        host_label: normalize_filter_values(host),
+        source_label: normalize_filter_values(source),
+        service_label: normalize_filter_values(service),
+        program_label: normalize_filter_values(program),
     }
     # No empty selector: the dashboard consistently requires a non-empty host.
-    matchers = [f'{host_label}={json.dumps(fields[host_label])}' if fields[host_label]
-                else f'{host_label}=~".+"']
+    matchers = [label_matcher(host_label, fields[host_label], require_host=True)]
     for key in (source_label, service_label, program_label):
-        value = fields[key]
-        if value:
-            matchers.append(f'{key}={json.dumps(value)}')
+        if matcher := label_matcher(key, fields[key]):
+            matchers.append(matcher)
     query = "{" + ",".join(matchers) + "}"
     if severity_mode == "canonical":
         query += " | label_format severity=`" + CANONICAL_SEVERITY_TEMPLATE + "`"
@@ -130,10 +160,10 @@ def build_viewer_query(
 def build_filter_scopes(
     *,
     host_label: str = "host",
-    host: str = "",
-    source: str = "",
-    service: str = "",
-    program: str = "",
+    host: str | list[str] = "",
+    source: str | list[str] = "",
+    service: str | list[str] = "",
+    program: str | list[str] = "",
     source_label: str = "source",
     service_label: str = "service_name",
     program_label: str = "syslog_identifier",
@@ -153,19 +183,22 @@ def build_filter_scopes(
         raise ViewerInputError("Invalid configured label name") from err
     if len(set(labels)) != 4:
         raise ViewerInputError("Filter labels must be distinct")
-    selections = [_checked_text(item, MAX_FIELD_LENGTH) for item in
+    selections = [normalize_filter_values(item) for item in
                   (host, source, service, program)]
     scopes = {}
     for index, key in enumerate(FILTER_KEYS):
         prior = list(zip(labels[:index], selections[:index], strict=True)) if cascading else []
-        matches = [f'{labels[0]}=~".+"']
-        for label, value in prior:
-            if value:
+        matches = [label_matcher(labels[0], [], require_host=True)]
+        for label, selection in prior:
+            matcher = label_matcher(label, selection)
+            if matcher:
                 if label == labels[0]:
-                    matches[0] = f'{label}={json.dumps(value)}'
+                    matches[0] = matcher
                 else:
-                    matches.append(f'{label}={json.dumps(value)}')
+                    matches.append(matcher)
         scopes[key] = "{" + ",".join(matches) + "}"
+        if len(scopes[key]) > MAX_LOGQL_LENGTH:
+            raise ViewerInputError("Filter scope is too long")
     return scopes
 
 
