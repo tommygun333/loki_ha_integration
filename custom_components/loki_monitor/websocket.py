@@ -18,6 +18,8 @@ from .viewer import (
     MAX_WINDOW_MINUTES,
     ViewerInputError,
     build_viewer_query,
+    build_filter_scopes,
+    DEFAULT_LABEL_MAP,
     get_time_bounds,
     page_streams,
 )
@@ -54,6 +56,15 @@ def websocket_sources(hass: HomeAssistant, connection: websocket_api.ActiveConne
 @websocket_api.websocket_command({
     probatio.Required("type"): "loki_monitor/filters",
     probatio.Optional("entry_id"): str,
+    probatio.Optional("host", default=""): str,
+    probatio.Optional("source", default=""): str,
+    probatio.Optional("service", default=""): str,
+    probatio.Optional("program", default=""): str,
+    probatio.Optional("minutes", default=60): int,
+    probatio.Optional("cascading", default=True): bool,
+    probatio.Optional("source_label", default="source"): str,
+    probatio.Optional("service_label", default="service_name"): str,
+    probatio.Optional("program_label", default="syslog_identifier"): str,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -63,19 +74,38 @@ async def websocket_filters(hass: HomeAssistant, connection: websocket_api.Activ
     if entry is None:
         connection.send_error(msg["id"], "source_not_found", "Select a loaded Loki server")
         return
-    labels = [entry.options.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL), "source", "service_name", "syslog_identifier"]
     try:
-        from .logic import validate_label_name
-        labels[0] = validate_label_name(labels[0])
-    except ValueError:
-        connection.send_error(msg["id"], "invalid_host_label", "Invalid configured host label")
+        minutes = msg.get("minutes", 60)
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= MAX_WINDOW_MINUTES:
+            raise ViewerInputError("Invalid filter time range")
+        mappings = {
+            "host": entry.options.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL),
+            "source": msg.get("source_label", "source"),
+            "service": msg.get("service_label", "service_name"),
+            "program": msg.get("program_label", "syslog_identifier"),
+        }
+        scopes = build_filter_scopes(
+            host_label=mappings["host"],
+            host=msg.get("host", ""), source=msg.get("source", ""),
+            service=msg.get("service", ""), program=msg.get("program", ""),
+            source_label=mappings["source"], service_label=mappings["service"],
+            program_label=mappings["program"], cascading=msg.get("cascading", True),
+        )
+    except ViewerInputError as err:
+        connection.send_error(msg["id"], "invalid_filters", str(err))
         return
-    results = await asyncio.gather(
-        *(entry.runtime_data.api.async_label_values(label, "24h") for label in labels),
-        return_exceptions=True,
-    )
+    try:
+        async with _QUERY_LIMIT:
+            results = await asyncio.gather(*(
+                entry.runtime_data.api.async_label_values(
+                    mappings[key], f"{minutes}m", query=scopes[key]
+                ) for key in ("host", "source", "service", "program")
+            ), return_exceptions=True)
+    except (LokiAuthError, LokiError):
+        results = [[], [], [], []]
     values = {
-        key: sorted({value for value in result if isinstance(value, str) and len(value) <= 128})[:150] if isinstance(result, list) else []
+        key: sorted({value for value in result if isinstance(value, str) and 0 < len(value) <= 128})[:250]
+        if isinstance(result, list) else []
         for key, result in zip(("host", "source", "service", "program"), results, strict=True)
     }
     connection.send_result(msg["id"], {"filters": values})
@@ -95,6 +125,10 @@ async def websocket_filters(hass: HomeAssistant, connection: websocket_api.Activ
     probatio.Optional("limit", default=DEFAULT_PAGE_SIZE): int,
     probatio.Optional("end_ns"): str,
     probatio.Optional("cursor_ns"): str,
+    probatio.Optional("severity_mode", default="canonical"): str,
+    probatio.Optional("source_label", default="source"): str,
+    probatio.Optional("service_label", default="service_name"): str,
+    probatio.Optional("program_label", default="syslog_identifier"): str,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -112,6 +146,10 @@ async def websocket_query_logs(hass: HomeAssistant, connection: websocket_api.Ac
             host=msg["host"], source=msg["source"], service=msg["service"],
             program=msg["program"], severity=msg["severity"],
             text=msg["text"], regex=msg["regex"],
+            severity_mode=msg.get("severity_mode", "canonical"),
+            source_label=msg.get("source_label", "source"),
+            service_label=msg.get("service_label", "service_name"),
+            program_label=msg.get("program_label", "syslog_identifier"),
         )
         start, end, effective_end = get_time_bounds(
             minutes=msg["minutes"], end_ns=msg.get("end_ns"), cursor_ns=msg.get("cursor_ns"),

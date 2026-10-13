@@ -140,10 +140,15 @@ class LokiClient:
             raise LokiQueryError("Invalid label list")
         return [value for value in result if isinstance(value, str)]
 
-    async def async_label_values(self, label: str, since: str = "1h") -> list[str]:
+    async def async_label_values(
+        self, label: str, since: str = "1h", *, query: str | None = None
+    ) -> list[str]:
         validate_label_name(label)
+        params = {"since": since}
+        if query is not None:
+            params["query"] = query
         result = await self._get(
-            f"loki/api/v1/label/{quote(label, safe='')}/values", {"since": since}
+            f"loki/api/v1/label/{quote(label, safe='')}/values", params
         )
         if not isinstance(result, list):
             raise LokiQueryError("Invalid label values")

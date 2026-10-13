@@ -83,3 +83,12 @@ async def test_viewer_rejects_metric_result():
     api = LokiClient(MockSession(MockResponse()), {CONF_URL:"http://loki:3100", CONF_AUTH_TYPE:"none"})
     with pytest.raises(LokiQueryError, match="stream"):
         await api.async_query_streams_ns('{host="x"}',start_ns=1,end_ns=10,limit=51)
+
+
+@pytest.mark.asyncio
+async def test_label_values_support_safe_scoped_query():
+    session = MockSession(MockResponse(body={"status":"success","data":["journal","file"]}))
+    api = LokiClient(session, {CONF_URL:"http://loki:3100", CONF_AUTH_TYPE:"none"})
+    vals = await api.async_label_values("source", "60m", query='{host="CoreELEC"}')
+    assert vals == ["journal", "file"]
+    assert session.calls[0][1]["params"] == {"since":"60m", "query":'{host="CoreELEC"}'}

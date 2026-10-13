@@ -1,0 +1,14 @@
+# Generated from Homelab Logs / Loki v1.9; adjust to taste.
+type: custom:loki-log-viewer-card
+minutes: 60
+page_size: 50
+severity: all
+severity_mode: canonical
+cascading_filters: true
+hide_ip_hosts: true
+hidden_hosts: []
+label_map:
+  source: source
+  service: service_name
+  program: syslog_identifier
+grafana_url: https://grafana.home

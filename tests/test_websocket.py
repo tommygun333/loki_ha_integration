@@ -27,8 +27,10 @@ class FakeConnection:
 class FakeLokiAPI:
     def __init__(self):
         self.requests = []
+        self.label_requests = []
 
-    async def async_label_values(self, name, since):
+    async def async_label_values(self, name, since, *, query=None):
+        self.label_requests.append((name, since, query))
         return {"host":["CoreELEC","pve"],"service_name":["kodi"],
                 "source":["journal"],"syslog_identifier":["systemd"]}.get(name, [])
 
@@ -129,7 +131,8 @@ async def test_viewer_filters_and_query_one_page(websocket_module):
     assert len(resp["logs"])==2
     query,params=apis[0].requests[0]
     assert '{host="CoreELEC",service_name="kodi"}' in query
-    assert 'detected_level=~"(?i)warn"' in query
+    assert ' | severity=~"(?i)^warning$"' in query
+    assert 'label_format severity=`' in query
     assert params["limit"]==3
     msg["end_ns"]=resp["end_ns"]
     msg["cursor_ns"]=resp["cursor_ns"]
@@ -150,3 +153,30 @@ async def test_viewer_denies_nonadmin_and_bad_entry(websocket_module):
     await websocket_module.websocket_query_logs(hass,conn,{**base,"entry_id":"e0","regex":"["})
     assert conn.errors[-1][1]=="invalid_filters"
     assert not any(api.requests for api in apis)
+
+
+@pytest.mark.asyncio
+async def test_filtered_suggestions_use_contextual_loki_label_queries(websocket_module):
+    hass, apis = make_hass()
+    conn = FakeConnection()
+    await websocket_module.websocket_filters(hass, conn, {
+        "id": 10, "host": "CoreELEC", "source": "journal", "service": "kodi",
+        "minutes": 360, "cascading": True,
+    })
+    requests = apis[0].label_requests
+    assert requests == [
+        ("host", "360m", '{host=~".+"}'),
+        ("source", "360m", '{host="CoreELEC"}'),
+        ("service_name", "360m", '{host="CoreELEC",source="journal"}'),
+        ("syslog_identifier", "360m", '{host="CoreELEC",source="journal",service_name="kodi"}'),
+    ]
+    assert conn.responses[0][1]["filters"]["program"] == ["systemd"]
+
+
+@pytest.mark.asyncio
+async def test_filter_schema_invalid_label_is_rejected(websocket_module):
+    hass, apis = make_hass()
+    conn = FakeConnection()
+    await websocket_module.websocket_filters(hass, conn, {"id": 1, "source_label": "host"})
+    assert conn.errors[0][1] == "invalid_filters"
+    assert not apis[0].label_requests

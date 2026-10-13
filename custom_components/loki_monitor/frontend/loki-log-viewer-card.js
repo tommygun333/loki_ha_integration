@@ -8,6 +8,16 @@ class LokiLogViewerCard extends HTMLElement {
       throw new Error("Expected type: custom:loki-log-viewer-card");
     }
     this._config = { ...config };
+    const labels = config.label_map || {};
+    this._labelMap = {
+      source_label: String(labels.source || "source"),
+      service_label: String(labels.service || "service_name"),
+      program_label: String(labels.program || "syslog_identifier"),
+    };
+    this._cascadingFilters = config.cascading_filters !== false;
+    this._hideIpHosts = config.hide_ip_hosts !== false;
+    this._hiddenHosts = Array.isArray(config.hidden_hosts) ? config.hidden_hosts.map(String) : [];
+    this._suggestionRevision = 0;
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
       this._renderShell();
@@ -46,7 +56,8 @@ class LokiLogViewerCard extends HTMLElement {
     this._filters = {
       host: String(c.host || ""), source: String(c.source || ""),
       service: String(c.service || ""), program: String(c.program || ""),
-      severity: String(c.severity || "all"), text: String(c.text || ""),
+      severity: String(c.severity || "all"), severity_mode: String(c.severity_mode || "canonical"),
+      text: String(c.text || ""),
       regex: String(c.regex || ""),
       minutes: [15, 60, 360, 1440, 10080].includes(Number(c.minutes)) ? Number(c.minutes) : 60,
       limit: [25, 50, 100].includes(Number(c.page_size)) ? Number(c.page_size) : 50,
@@ -66,6 +77,7 @@ class LokiLogViewerCard extends HTMLElement {
         :host { display:block; color:var(--primary-text-color); font-family:var(--paper-font-body1_-_font-family,inherit); }
         ha-card { display:block; background:var(--card-background-color,var(--ha-card-background,var(--secondary-background-color))); border-radius:var(--ha-card-border-radius,12px); box-shadow:var(--ha-card-box-shadow,none); padding:16px; }
         .head { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:14px; }
+        .head a { font-size:12px; color:var(--primary-color); }
         h2 { font-size:18px; margin:0; font-weight:600; }
         .sub { font-size:12px; color:var(--secondary-text-color); }
         .filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px; align-items:end; }
@@ -93,7 +105,7 @@ class LokiLogViewerCard extends HTMLElement {
         @media (max-width:580px) { ha-card { padding:12px; } .filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
       </style>
       <ha-card>
-        <div class="head"><div><h2>Loki Log Viewer</h2><span class="sub">Read-only · recent logs · administrators</span></div></div>
+        <div class="head"><div><h2>Loki Log Viewer</h2><span class="sub">Read-only · Grafana-compatible severity · administrators</span></div><a id="grafana" hidden target="_blank" rel="noopener noreferrer">Grafana Explore ↗</a></div>
         <section class="filters">
           <label>Server<select id="entry"></select></label>
           <label>Time range<select id="minutes"><option value="15">15 minutes</option><option value="60">1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option><option value="10080">7 days</option></select></label>
@@ -101,7 +113,8 @@ class LokiLogViewerCard extends HTMLElement {
           <label>Service<input id="service" list="services" maxlength="128" placeholder="All services"></label><datalist id="services"></datalist>
           <label>Source<input id="source" list="sources" maxlength="128" placeholder="All sources"></label><datalist id="sources"></datalist>
           <label>Program<input id="program" list="programs" maxlength="128" placeholder="All programs"></label><datalist id="programs"></datalist>
-          <label>Severity<select id="severity"><option value="all">All levels</option><option value="errors">Errors / critical / fatal</option><option value="warnings">Warnings</option><option value="info">Info</option><option value="debug">Debug</option><option value="trace">Trace</option><option value="unknown">Unknown</option></select></label>
+          <label>Severity<select id="severity"><option value="all">All levels</option><option value="errors">High severity (emergency → error)</option><option value="warnings">Warnings</option><option value="emergency">Emergency</option><option value="alert">Alert</option><option value="critical">Critical</option><option value="fatal">Fatal</option><option value="error">Error</option><option value="warning">Warning</option><option value="notice">Notice</option><option value="info">Info</option><option value="debug">Debug</option><option value="trace">Trace</option><option value="unknown">Unknown</option></select></label>
+          <label>Severity classification<select id="severity_mode"><option value="canonical">Grafana v1.9 (indexed → detected → marker)</option><option value="detected">Detected level (legacy)</option></select></label>
           <label>Page size<select id="limit"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
           <label>Text contains<input id="text" maxlength="256" placeholder="Plain text"></label>
           <label>Regex<input id="regex" maxlength="256" placeholder="Optional LogQL regex"></label>
@@ -113,11 +126,33 @@ class LokiLogViewerCard extends HTMLElement {
     `;
     this.shadowRoot.getElementById("apply").addEventListener("click", () => this._query(false));
     this.shadowRoot.getElementById("older").addEventListener("click", () => this._query(true));
+    for (const [index, key] of ["host", "source", "service", "program"].entries()) {
+      this.shadowRoot.getElementById(key).addEventListener("change", async () => {
+        if (this._cascadingFilters) {
+          for (const downstream of ["host", "source", "service", "program"].slice(index + 1)) {
+            this.shadowRoot.getElementById(downstream).value = "";
+          }
+        }
+        await this._loadSuggestions();
+      });
+    }
+    this.shadowRoot.getElementById("minutes").addEventListener("change", () => this._loadSuggestions());
     this.shadowRoot.getElementById("entry").addEventListener("change", async () => {
       this._activeEntryId = this.shadowRoot.getElementById("entry").value;
       await this._loadSuggestions();
       await this._query(false);
     });
+    if (this._config.grafana_url) {
+      const link = this.shadowRoot.getElementById("grafana");
+      try {
+        const url = new URL(String(this._config.grafana_url), window.location.href);
+        if (url.protocol === "https:" || url.protocol === "http:") {
+          url.pathname = url.pathname.replace(/\/$/, "") + "/explore";
+          link.href = url.toString();
+          link.hidden = false;
+        }
+      } catch { /* Ignore invalid optional Grafana URL. */ }
+    }
     for (const control of this.shadowRoot.querySelectorAll("input")) {
       control.addEventListener("keydown", (e) => { if (e.key === "Enter") this._query(false); });
     }
@@ -157,27 +192,49 @@ class LokiLogViewerCard extends HTMLElement {
     }
   }
 
+  _isIpHost(value) {
+    const v = String(value);
+    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(v) &&
+      v.split(".").every(part => Number(part) <= 255);
+    // IPv6 (including compressed and IPv4-mapped forms) is only hidden in suggestions.
+    const ipv6 = v.includes(":") && /^[0-9a-fA-F:.%]+$/.test(v);
+    return ipv4 || ipv6;
+  }
+
   async _loadSuggestions() {
+    if (!this._hass || !this._activeEntryId) return;
     const id = this._activeEntryId;
+    const revision = ++this._suggestionRevision;
+    const filters = this._readFilters();
     try {
-      const response = await this._hass.connection.sendMessagePromise({type:"loki_monitor/filters",entry_id:id});
-      if (id !== this._activeEntryId) return;
+      const response = await this._hass.connection.sendMessagePromise({
+        type: "loki_monitor/filters", entry_id: id,
+        host: filters.host, source: filters.source,
+        service: filters.service, program: filters.program,
+        minutes: filters.minutes, cascading: this._cascadingFilters,
+        ...this._labelMap,
+      });
+      if (id !== this._activeEntryId || revision !== this._suggestionRevision) return;
       const options = response.filters || {};
-      for (const [key, listId] of [["host","hosts"],["service","services"],["source","sources"],["program","programs"]]) {
+      for (const [key, listId] of [["host","hosts"],["source","sources"],["service","services"],["program","programs"]]) {
         const list = this.shadowRoot.getElementById(listId);
         list.replaceChildren();
-        for (const value of options[key] || []) {
+        const filtered = (options[key] || []).filter(value =>
+          key !== "host" || (!this._hiddenHosts.includes(value) &&
+          (!this._hideIpHosts || !this._isIpHost(value)))
+        );
+        for (const value of filtered) {
           const element = document.createElement("option");
           element.value = value;
           list.appendChild(element);
         }
       }
-    } catch { /* Optional suggestions must never block the viewer. */ }
+    } catch { /* Suggestions are optional; querying logs remains available. */ }
   }
 
   _readFilters() {
     const values = {};
-    for (const key of ["host","service","source","program","severity","text","regex","minutes","limit"]) {
+    for (const key of ["host","service","source","program","severity","severity_mode","text","regex","minutes","limit"]) {
       values[key] = this.shadowRoot.getElementById(key).value;
     }
     values.minutes = Number(values.minutes);
@@ -198,7 +255,8 @@ class LokiLogViewerCard extends HTMLElement {
       this._appliedFilters = filters;
       this._renderRows();
     }
-    const message = { type:"loki_monitor/query_logs", entry_id:this._activeEntryId, ...filters };
+    const message = { type:"loki_monitor/query_logs", entry_id:this._activeEntryId,
+      ...filters, ...this._labelMap };
     if (older) {
       message.cursor_ns = this._cursor;
       message.end_ns = this._anchor;
@@ -257,10 +315,12 @@ class LokiLogViewerCard extends HTMLElement {
       meta.appendChild(date);
       const labels = log.labels || {};
       const extra = log.metadata || {};
-      const level = String(extra.detected_level || labels.detected_level || labels.level || "unknown");
+      const level = String(labels.severity || extra.severity || labels.level ||
+        extra.detected_level || labels.detected_level || "unknown");
       const levelEl = document.createElement("span"); levelEl.className = `level ${/error|critical|fatal/i.test(level) ? "error" : /warn/i.test(level) ? "warn" : ""}`;
       levelEl.textContent = level; meta.appendChild(levelEl);
-      for (const value of [labels.host, labels.service_name, labels.source, labels.syslog_identifier]) {
+      for (const value of [labels.host, labels[this._labelMap.service_label],
+        labels[this._labelMap.source_label], labels[this._labelMap.program_label]]) {
         if (!value) continue;
         const span = document.createElement("span"); span.textContent = String(value); meta.appendChild(span);
       }

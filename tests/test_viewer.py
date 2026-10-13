@@ -14,8 +14,11 @@ from loki_monitor.viewer import (
 
 def test_viewer_matches_dashboard_scope_and_detected_severity():
     query = build_viewer_query(severity="warnings")
-    assert query == '{host=~".+"} | detected_level=~"(?i)warn"'
-    assert build_viewer_query(severity="errors").endswith('detected_level=~"(?i)(error|critical|fatal)"')
+    assert query.startswith('{host=~".+"} | label_format severity=`')
+    assert query.endswith(' | severity=~"(?i)^warning$"')
+    assert 'contains "[emerg]" $line' in query
+    assert build_viewer_query(severity="errors").endswith(' | severity=~"(?i)^(emergency|alert|critical|fatal|error)$"')
+    assert build_viewer_query(severity="warnings", severity_mode="detected") == '{host=~".+"} | detected_level=~"(?i)warn"'
 
 
 def test_exact_filters_do_not_inject_logql():
@@ -26,13 +29,14 @@ def test_exact_filters_do_not_inject_logql():
     assert f'service_name={json.dumps(service)}' in query
     assert f'|= {json.dumps("a\" | drop x")}' in query
     assert '|~ "404|500"' in query
-    assert query.count('{') == 1 and query.count('}') == 1
+    assert f'host={json.dumps(host)}' in query
 
 
 @pytest.mark.parametrize("kwargs", [
     {"severity":"ROOT"}, {"host":"a" * 130}, {"text":"b" * 257},
     {"regex":"["}, {"host_label":"host} | json"},
-    {"program":"bad\nprogram"},
+    {"program":"bad\nprogram"}, {"severity_mode":"invalid"},
+    {"service_label":"service} | bad"},
 ])
 def test_viewer_rejects_invalid_inputs(kwargs):
     with pytest.raises(ViewerInputError):
@@ -77,3 +81,49 @@ def test_card_no_eval_and_dynamic_logs_are_text_only():
     assert 'line.textContent = String(log.line' in code
     assert 'data.textContent = JSON.stringify(' in code
     assert "eval(" not in code
+
+
+def test_cascading_scopes_follow_grafana_v19_filters():
+    from loki_monitor.viewer import build_filter_scopes
+    scopes = build_filter_scopes(host="CoreELEC", source="journal", service="kodi")
+    assert scopes["host"] == '{host=~".+"}'
+    assert scopes["source"] == '{host="CoreELEC"}'
+    assert scopes["service"] == '{host="CoreELEC",source="journal"}'
+    assert scopes["program"] == '{host="CoreELEC",source="journal",service_name="kodi"}'
+    independent = build_filter_scopes(host="CoreELEC", source="journal", cascading=False)
+    assert all(scope == '{host=~".+"}' for scope in independent.values())
+
+
+def test_cascading_scope_escapes_untrusted_values_and_custom_label_map():
+    from loki_monitor.viewer import build_filter_scopes
+    name = 'x"} | json |~".*'
+    scopes = build_filter_scopes(host=name, source="journal", source_label="log_source", service_label="svc")
+    assert f'host={json.dumps(name)}' in scopes["source"]
+    assert 'log_source="journal"' in scopes["service"]
+    assert 'service_name' not in scopes["program"]
+    with pytest.raises(ViewerInputError):
+        build_filter_scopes(host_label="host", source_label="host")
+    assert '{log_source="journal"}' not in scopes["service"]
+
+
+def test_grafana_v19_severity_exact_template():
+    from loki_monitor.viewer import CANONICAL_SEVERITY_TEMPLATE
+    from tools.grafana_dashboard_profile import severity_template, log_panel_query
+    import os
+    dashboard_file = os.environ.get("GRAFANA_V19_FILE")
+    if dashboard_file and Path(dashboard_file).is_file():
+        dashboard = json.loads(Path(dashboard_file).read_text())
+        assert CANONICAL_SEVERITY_TEMPLATE == severity_template(log_panel_query(dashboard))
+    assert '[emerg]' in CANONICAL_SEVERITY_TEMPLATE
+    assert '.level | lower' in CANONICAL_SEVERITY_TEMPLATE
+    assert '.detected_level | lower' in CANONICAL_SEVERITY_TEMPLATE
+
+
+def test_card_supports_cascading_hidden_hosts_and_label_maps():
+    code = (Path(__file__).resolve().parents[1] / "custom_components/loki_monitor/frontend/loki-log-viewer-card.js").read_text()
+    assert 'this._cascadingFilters' in code
+    assert 'this._hideIpHosts' in code
+    assert 'this._hiddenHosts' in code
+    assert 'this._labelMap' in code
+    assert '_suggestionRevision' in code
+    assert 'labels.severity' in code
