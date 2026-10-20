@@ -35,6 +35,18 @@ class LokiQueryError(LokiError):
     """A query or an API response was invalid."""
 
 
+class LokiTimeoutError(LokiError):
+    """A Loki HTTP request exceeded the client timeout."""
+
+
+class LokiHTTPError(LokiError):
+    """An HTTP status returned by Loki (with no response body or URL)."""
+
+    def __init__(self, status: int) -> None:
+        self.status = status
+        super().__init__(f"Loki returned HTTP {status}")
+
+
 class LokiClient:
     """A read-only client; no push, delete, or administrative endpoints."""
 
@@ -69,13 +81,15 @@ class LokiClient:
                 if response.status == 400:
                     raise LokiQueryError("Loki rejected the query (HTTP 400)")
                 if response.status != 200:
-                    raise LokiError(f"Loki returned HTTP {response.status}")
+                    raise LokiHTTPError(response.status)
                 try:
                     body = await response.json(content_type=None)
                 except (ValueError, TypeError) as err:
                     raise LokiQueryError("Loki did not return valid JSON") from err
-        except (asyncio.TimeoutError, ClientError) as err:
-            raise LokiError("Could not reach Loki") from err
+        except asyncio.TimeoutError as err:
+            raise LokiTimeoutError("Loki HTTP request timed out after 25 seconds") from err
+        except ClientError as err:
+            raise LokiError("Could not reach Loki (connection error)") from err
         if not isinstance(body, dict) or body.get("status") != "success":
             raise LokiQueryError("Unexpected Loki response")
         return body.get("data")
@@ -90,6 +104,19 @@ class LokiClient:
         data = await self._get("loki/api/v1/query", {"query": query})
         if not isinstance(data, dict) or "resultType" not in data:
             raise LokiQueryError("Missing Loki resultType")
+        return data
+
+    async def async_query_at(self, query: str, *, time_ns: int) -> dict[str, Any]:
+        """Evaluate an instant metric at a fixed nanosecond timestamp.
+
+        Needed to partition expensive 24h canonical counts without changing
+        the exact 24-hour window or the Grafana severity classifier.
+        """
+        if not isinstance(time_ns, int) or isinstance(time_ns, bool) or time_ns <= 0:
+            raise ValueError("Invalid Loki evaluation timestamp")
+        data = await self._get("loki/api/v1/query", {"query": query, "time": str(time_ns)})
+        if not isinstance(data, dict) or data.get("resultType") not in ("scalar", "vector"):
+            raise LokiQueryError("Loki instant query did not return metric values")
         return data
 
     async def async_query_range(

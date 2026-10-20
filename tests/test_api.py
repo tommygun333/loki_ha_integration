@@ -92,3 +92,25 @@ async def test_label_values_support_safe_scoped_query():
     vals = await api.async_label_values("source", "60m", query='{host="CoreELEC"}')
     assert vals == ["journal", "file"]
     assert session.calls[0][1]["params"] == {"since":"60m", "query":'{host="CoreELEC"}'}
+
+
+@pytest.mark.asyncio
+async def test_instant_metric_at_explicit_evaluation_time():
+    session = MockSession(MockResponse())
+    api = LokiClient(session, {CONF_URL: "http://loki:3100", CONF_AUTH_TYPE: "none"})
+    out = await api.async_query_at('sum(count_over_time({host="x"}[120m]))', time_ns=1800000000000000000)
+    assert out["resultType"] == "vector"
+    assert session.calls[0][1]["params"]["time"] == "1800000000000000000"
+    with pytest.raises(ValueError):
+        await api.async_query_at("vector(1)", time_ns=-10)
+
+
+@pytest.mark.asyncio
+async def test_loki_http_error_preserves_safe_status_without_query_contents():
+    from loki_monitor.api import LokiHTTPError
+    api = LokiClient(MockSession(MockResponse(status=503)), {CONF_URL: "http://loki:3100", CONF_AUTH_TYPE: "none"})
+    with pytest.raises(LokiHTTPError) as exc:
+        await api.async_query('token="do-not-log"')
+    assert exc.value.status == 503
+    assert "503" in str(exc.value)
+    assert "do-not-log" not in str(exc.value)

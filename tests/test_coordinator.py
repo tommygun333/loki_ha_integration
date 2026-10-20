@@ -255,3 +255,112 @@ async def test_alert_failure_is_isolated_from_metric_sensors(coordinator_class):
     assert data["errors_1h"] == 9
     assert data["alert_rule_failures_count"] == 1
     assert data["alert_rule_failures"] == ["broken"]
+
+@pytest.mark.asyncio
+async def test_canonical_24h_timeout_uses_exact_nonoverlapping_segments(coordinator_class, monkeypatch):
+    """The 24h fallback counts *all* logs, unlike the paged log viewer."""
+    from loki_monitor.api import LokiTimeoutError
+    import sys
+
+    anchor = 1_800_000_000_000_000_000
+    monkeypatch.setattr(sys.modules["loki_monitor.coordinator"].time, "time_ns", lambda: anchor)
+
+    class BusyAPI(FakeAPI):
+        def __init__(self):
+            super().__init__()
+            self.slices = []
+            self.long_calls = []
+
+        async def async_query(self, query):
+            if "label_format severity" in query and "[24h]" in query:
+                self.long_calls.append(query)
+                raise LokiTimeoutError("Loki HTTP request timed out after 25 seconds")
+            return await super().async_query(query)
+
+        async def async_query_at(self, query, *, time_ns):
+            self.slices.append((query, time_ns))
+            return {"resultType": "vector", "result": [{"value": [time_ns / 1e9, "2"]}]}
+
+    api = BusyAPI()
+    coordinator = coordinator_class(None, api, {"severity_source": "canonical"})
+    first = await coordinator._async_update_data()
+    assert first["errors_1h"] == 9
+    assert first["warnings_1h"] == 9
+    assert first["errors_24h"] == 24
+    assert first["warnings_24h"] == 24
+    assert first["failed_query_count"] == 0
+    assert len(api.long_calls) == 2
+    assert len(api.slices) == 24
+    for pattern in ("(emergency|alert|critical|fatal|error)", "^warning$"):
+        times = sorted(t for q, t in api.slices if pattern in q)
+        assert len(times) == 12
+        assert times == sorted(anchor - i * 7_200_000_000_000 for i in range(12))
+        assert all("[120m]" in q for q, t in api.slices if pattern in q)
+
+    second = await coordinator._async_update_data()
+    assert second["errors_24h"] == 24
+    assert second["warnings_24h"] == 24
+    assert len(api.long_calls) == 2  # Persist fallback for entry lifetime.
+
+
+@pytest.mark.asyncio
+async def test_only_a_failed_two_hour_slice_is_split_further(coordinator_class):
+    from loki_monitor.api import LokiHTTPError
+
+    class ChunkTrouble(FakeAPI):
+        def __init__(self):
+            super().__init__()
+            self.tries = []
+
+        async def async_query(self, query):
+            if "label_format severity" in query and "[24h]" in query:
+                raise LokiHTTPError(503)
+            return await super().async_query(query)
+
+        async def async_query_at(self, query, *, time_ns):
+            self.tries.append((query, time_ns))
+            # One of the twelve buckets per severity, not all, needs splitting.
+            if "[120m]" in query and time_ns == self.anchor:
+                raise LokiHTTPError(504)
+            return {"resultType": "scalar", "result": [time_ns / 1e9, "1"]}
+
+    api = ChunkTrouble()
+    import time
+    api.anchor = time.time_ns()
+    # Use a deterministic anchor via coordinator module rather than wall clock.
+    import sys
+    from unittest.mock import patch
+    with patch.object(sys.modules["loki_monitor.coordinator"].time, "time_ns", return_value=api.anchor):
+        coordinator = coordinator_class(None, api, {"severity_source": "canonical"})
+        data = await coordinator._async_update_data()
+    assert data["errors_24h"] == 13
+    assert data["warnings_24h"] == 13
+    assert sum("[60m]" in q for q, t in api.tries) == 4
+
+
+@pytest.mark.asyncio
+async def test_unexpected_http_query_failure_does_not_fan_out_queries(coordinator_class):
+    from loki_monitor.api import LokiHTTPError
+
+    class NonRetryable(FakeAPI):
+        def __init__(self):
+            super().__init__()
+            self.slices = 0
+
+        async def async_query(self, query):
+            if "label_format severity" in query and "[24h]" in query:
+                raise LokiHTTPError(422)
+            return await super().async_query(query)
+
+        async def async_query_at(self, query, *, time_ns):
+            self.slices += 1
+            return {"resultType": "scalar", "result": [1, "1"]}
+
+    api = NonRetryable()
+    coordinator = coordinator_class(None, api, {"severity_source": "canonical"})
+    data = await coordinator._async_update_data()
+    assert data["errors_1h"] == 9
+    assert data["errors_24h"] is None
+    assert data["warnings_24h"] is None
+    assert api.slices == 0
+    assert data["failed_query_count"] >= 2

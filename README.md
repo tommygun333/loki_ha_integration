@@ -1,6 +1,6 @@
 # Grafana Loki Monitor for Home Assistant
 
-**Version 0.4.0 — HACS custom repository**
+**Version 0.4.1 — HACS custom repository**
 
 A **read-only** Home Assistant integration for Grafana Loki. It queries Loki's HTTP API and creates monitoring entities and custom LogQL metric sensors. **Grafana Alloy remains responsible for collecting logs.** No duplicate ingestion is performed.
 
@@ -207,7 +207,30 @@ For testing from Developer Tools, inspect the action response. A log stream quer
 
 Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q`. GitHub Actions runs the tests, HACS validator, and Home Assistant hassfest on changes. See [PUBLISHING.md](PUBLISHING.md) for creating the repository and publishing updates.
 
+### Canonical 24h counts under heavy Loki load (v0.4.1)
+
+The native Grafana v1.9 canonical 24h aggregation can exceed the Loki backend's
+query limit or the integration's 25-second HTTP timeout. If an individual 24h
+canonical count hits a timeout or a server-side HTTP 500/502/503/504 error, the
+integration switches **that one metric** to 12 non-overlapping 2-hour instant
+queries at fixed evaluation times, summed to reconstruct the same rolling 24h
+window. If a 2-hour segment is still too large, it retries only that segment as
+two 1-hour slices. At most two historical slices run concurrently per Loki entry.
+The fallback persists for that metric until its config entry reloads. This is
+more request-intensive than a successful native 24h query; if Loki cannot handle
+1-hour slices either, the 24h metric remains unavailable and the other metrics
+continue updating. The 1h, indexed and detected modes are unchanged. Errors now
+report safe HTTP status/timeout information instead of just `LokiError`.
+
+Note that high-volume 24h canonical queries may still be expensive in aggregate,
+especially with many scoped monitors. The fallback solves per-query timeouts; it
+does not increase Loki's available CPU or eliminate the expense of evaluating the
+canonical classification. Lower the metric polling frequency or use detected
+severity if resource usage becomes excessive.
+
 ## Changelog
+
+- **0.4.1:** Fallback to bounded historical slices for canonical 24h counts when the full query times out or Loki returns a retryable server error. More informative sanitized query failure logging; no Lovelace resource change.
 
 - **0.4.0:** Grafana v1.9 canonical severity as an opt-in mode for existing counters and host/service monitors; bounded alert rules with add/edit/remove/test flows, Loki newest-entry checkpoints, rolling-window thresholds, persistent cooldown state, HA event `loki_monitor_alert`, private optional log message, and failure diagnostics. No new reload mechanism; v0.3.2 viewer JavaScript unchanged.
 
