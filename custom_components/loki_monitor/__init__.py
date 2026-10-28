@@ -49,7 +49,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             "/loki_monitor/loki-log-viewer-card.js",
             str(Path(__file__).parent / "frontend" / "loki-log-viewer-card.js"),
             False,  # Let browser fetch new card code after an integration update.
-        )
+        ),
+        StaticPathConfig(
+            "/loki_monitor/loki-monitor-cards.js",
+            str(Path(__file__).parent / "frontend" / "loki-monitor-cards.js"),
+            False,
+        ),
     ])
 
     async def query_logs(call: ServiceCall) -> dict:

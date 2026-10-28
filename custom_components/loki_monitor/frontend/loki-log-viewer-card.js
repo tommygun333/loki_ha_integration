@@ -58,7 +58,7 @@ class LokiLogViewerCard extends HTMLElement {
     this._filters = {
       host: this._initialSelection(c.host), source: this._initialSelection(c.source),
       service: this._initialSelection(c.service), program: this._initialSelection(c.program),
-      severity: String(c.severity || "all"), severity_mode: String(c.severity_mode || "canonical"),
+      severity: String(c.severity || "all"), severity_mode: "indexed",
       text: String(c.text || ""),
       regex: String(c.regex || ""),
       minutes: [15, 60, 360, 1440, 10080].includes(Number(c.minutes)) ? Number(c.minutes) : 60,
@@ -134,7 +134,7 @@ class LokiLogViewerCard extends HTMLElement {
         @media (max-width:580px) { ha-card { padding:12px; } .filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
       </style>
       <ha-card>
-        <div class="head"><div><h2>Loki Log Viewer</h2><span class="sub">Read-only · Grafana-compatible severity · administrators</span></div><a id="grafana" hidden target="_blank" rel="noopener noreferrer">Grafana Explore ↗</a></div>
+        <div class="head"><div><h2>Loki Log Viewer</h2><span class="sub">Read-only · Alloy indexed severity · administrators</span></div><a id="grafana" hidden target="_blank" rel="noopener noreferrer">Grafana Explore ↗</a></div>
         <section class="filters">
           <label>Server<select id="entry"></select></label>
           <label>Time range<select id="minutes"><option value="15">15 minutes</option><option value="60">1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option><option value="10080">7 days</option></select></label>
@@ -142,8 +142,8 @@ class LokiLogViewerCard extends HTMLElement {
           <label>Source<button type="button" class="multi-trigger" id="source" aria-haspopup="dialog"><span class="selected">All sources</span><span class="chevron" aria-hidden="true">▾</span></button></label>
           <label>Service<button type="button" class="multi-trigger" id="service" aria-haspopup="dialog"><span class="selected">All services</span><span class="chevron" aria-hidden="true">▾</span></button></label>
           <label>Program<button type="button" class="multi-trigger" id="program" aria-haspopup="dialog"><span class="selected">All programs</span><span class="chevron" aria-hidden="true">▾</span></button></label>
-          <label>Severity<select id="severity"><option value="all">All levels</option><option value="errors">High severity (emergency → error)</option><option value="warnings">Warnings</option><option value="emergency">Emergency</option><option value="alert">Alert</option><option value="critical">Critical</option><option value="fatal">Fatal</option><option value="error">Error</option><option value="warning">Warning</option><option value="notice">Notice</option><option value="info">Info</option><option value="debug">Debug</option><option value="trace">Trace</option><option value="unknown">Unknown</option></select></label>
-          <label>Severity classification<select id="severity_mode"><option value="canonical">Grafana v1.9 (indexed → detected → marker)</option><option value="detected">Detected level (legacy)</option></select></label>
+          <label>Severity<select id="severity"><option value="all">All levels</option><option value="errors">High severity (emergency → error)</option><option value="warnings">Warnings</option><option value="normal">Normal (notice/info/debug/trace)</option><option value="emergency">Emergency</option><option value="alert">Alert</option><option value="critical">Critical</option><option value="fatal">Fatal</option><option value="error">Error</option><option value="warning">Warning</option><option value="notice">Notice</option><option value="info">Info</option><option value="debug">Debug</option><option value="trace">Trace</option><option value="unknown">Unknown</option></select></label>
+          
           <label>Page size<select id="limit"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
           <label>Text contains<input id="text" maxlength="256" placeholder="Plain text"></label>
           <label>Regex<input id="regex" maxlength="256" placeholder="Optional LogQL regex"></label>
@@ -397,7 +397,7 @@ class LokiLogViewerCard extends HTMLElement {
     for (const key of ["host", "service", "source", "program"]) {
       values[key] = [...this._filters[key]];
     }
-    for (const key of ["severity", "severity_mode", "text", "regex", "minutes", "limit"]) {
+    for (const key of ["severity", "text", "regex", "minutes", "limit"]) {
       values[key] = this.shadowRoot.getElementById(key).value;
     }
     values.minutes = Number(values.minutes);
@@ -478,9 +478,8 @@ class LokiLogViewerCard extends HTMLElement {
       meta.appendChild(date);
       const labels = log.labels || {};
       const extra = log.metadata || {};
-      const level = String(labels.severity || extra.severity || labels.level ||
-        extra.detected_level || labels.detected_level || "unknown");
-      const levelEl = document.createElement("span"); levelEl.className = `level ${/error|critical|fatal/i.test(level) ? "error" : /warn/i.test(level) ? "warn" : ""}`;
+      const level = String(labels.severity || extra.severity || labels.level || "unknown");
+      const levelEl = document.createElement("span"); levelEl.className = `level ${/^(emergency|alert|critical|fatal|error)$/i.test(level) ? "error" : /warn/i.test(level) ? "warn" : ""}`;
       levelEl.textContent = level; meta.appendChild(levelEl);
       for (const value of [labels.host, labels[this._labelMap.service_label],
         labels[this._labelMap.source_label], labels[this._labelMap.program_label]]) {

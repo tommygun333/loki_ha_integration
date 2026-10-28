@@ -22,15 +22,12 @@ MAX_TEXT_LENGTH = 256
 MAX_REGEX_LENGTH = 256
 MAX_LOGQL_LENGTH = 8192
 
-# Imported verbatim from the Homelab Logs / Loki v1.9 Logs panel.
-# Indexed level takes priority, then detected_level, then line markers.
-# This preserves [emerg]/[fatal] classification as seen in Grafana.
-CANONICAL_SEVERITY_TEMPLATE = '{{ $line := __line__ | lower }}{{ $idxlvl := .level | lower }}{{ $dlev := .detected_level | lower }}{{ if and $idxlvl (ne $idxlvl "unknown") }}{{ if or (eq $idxlvl "emerg") (eq $idxlvl "emergency") (eq $idxlvl "0") }}emergency{{ else if or (eq $idxlvl "alert") (eq $idxlvl "1") }}alert{{ else if or (eq $idxlvl "crit") (eq $idxlvl "critical") (eq $idxlvl "2") }}critical{{ else if eq $idxlvl "fatal" }}fatal{{ else if or (eq $idxlvl "err") (eq $idxlvl "eror") (eq $idxlvl "error") (eq $idxlvl "3") }}error{{ else if or (eq $idxlvl "warn") (eq $idxlvl "warning") (eq $idxlvl "4") }}warning{{ else if or (eq $idxlvl "notice") (eq $idxlvl "5") }}notice{{ else if or (eq $idxlvl "info") (eq $idxlvl "information") (eq $idxlvl "informational") (eq $idxlvl "6") }}info{{ else if or (eq $idxlvl "debug") (eq $idxlvl "dbug") (eq $idxlvl "7") }}debug{{ else if eq $idxlvl "trace" }}trace{{ else }}{{ $idxlvl }}{{ end }}{{ else if and $dlev (ne $dlev "unknown") }}{{ if or (eq $dlev "emerg") (eq $dlev "emergency") (eq $dlev "0") }}emergency{{ else if or (eq $dlev "alert") (eq $dlev "1") }}alert{{ else if or (eq $dlev "crit") (eq $dlev "critical") (eq $dlev "2") }}critical{{ else if eq $dlev "fatal" }}fatal{{ else if or (eq $dlev "err") (eq $dlev "eror") (eq $dlev "error") (eq $dlev "3") }}error{{ else if or (eq $dlev "warn") (eq $dlev "warning") (eq $dlev "4") }}warning{{ else if or (eq $dlev "notice") (eq $dlev "5") }}notice{{ else if or (eq $dlev "info") (eq $dlev "information") (eq $dlev "informational") (eq $dlev "6") }}info{{ else if or (eq $dlev "debug") (eq $dlev "dbug") (eq $dlev "7") }}debug{{ else if eq $dlev "trace" }}trace{{ else }}{{ $dlev }}{{ end }}{{ else }}{{ if contains "[emerg]" $line }}emergency{{ else if contains "[emergency]" $line }}emergency{{ else if contains "[alert]" $line }}alert{{ else if contains "[critical]" $line }}critical{{ else if contains "[crit]" $line }}critical{{ else if contains "[fatal]" $line }}fatal{{ else if contains "[error]" $line }}error{{ else if contains "[err]" $line }}error{{ else if contains "[warning]" $line }}warning{{ else if contains "[warn]" $line }}warning{{ else if contains "[notice]" $line }}notice{{ else if contains "[info]" $line }}info{{ else if contains "[debug]" $line }}debug{{ else if contains "[trace]" $line }}trace{{ else if contains " fatal <" $line }}fatal{{ else if contains " error <" $line }}error{{ else if contains " warning <" $line }}warning{{ else if contains " warn <" $line }}warning{{ else if contains " notice <" $line }}notice{{ else if contains " info <" $line }}info{{ else if contains " debug <" $line }}debug{{ else }}unknown{{ end }}{{ end }}'
-
+# Alloy sets indexed severity before Loki ingestion. Never reconstruct from log text.
 SEVERITY_PATTERNS = {
     "all": None,
     "errors": "(?i)^(emergency|alert|critical|fatal|error)$",
     "warnings": "(?i)^warning$",
+    "normal": "(?i)^(notice|info|debug|trace)$",
     "emergency": "(?i)^emergency$",
     "alert": "(?i)^alert$",
     "critical": "(?i)^critical$",
@@ -43,7 +40,7 @@ SEVERITY_PATTERNS = {
     "trace": "(?i)^trace$",
     "unknown": "(?i)^unknown$",
 }
-SEVERITY_MODES = ("canonical", "detected")
+SEVERITY_MODES = ("indexed",)
 DEFAULT_LABEL_MAP = {"source": "source", "service": "service_name", "program": "syslog_identifier"}
 FILTER_KEYS = ("host", "source", "service", "program")
 
@@ -90,70 +87,47 @@ def label_matcher(label: str, selection: list[str], *, require_host: bool = Fals
 
 
 def build_viewer_query(
-    *,
-    host_label: str = "host",
-    host: str | list[str] = "",
-    source: str | list[str] = "",
-    service: str | list[str] = "",
-    program: str | list[str] = "",
-    severity: str = "all",
-    text: str = "",
-    regex: str = "",
-    severity_mode: str = "canonical",
-    source_label: str = "source",
-    service_label: str = "service_name",
-    program_label: str = "syslog_identifier",
+    *, host_label: str = 'host', host: str | list[str] = '',
+    source: str | list[str] = '', service: str | list[str] = '',
+    program: str | list[str] = '', severity: str = 'all',
+    text: str = '', regex: str = '', severity_mode: str = 'indexed',
+    source_label: str = 'source', service_label: str = 'service_name',
+    program_label: str = 'syslog_identifier',
 ) -> str:
-    """Build a log-stream query from fixed filter fields, not arbitrary LogQL."""
-    try:
-        host_label = validate_label_name(host_label)
-    except ValueError as err:
-        raise ViewerInputError("Invalid configured host label") from err
+    """Indexed-only selectors, matching Alloy and Grafana v2.5.3."""
+    if severity_mode != 'indexed':
+        raise ViewerInputError('Legacy severity reconstruction removed; use indexed severity')
     if severity not in SEVERITY_PATTERNS:
-        raise ViewerInputError("Unsupported severity filter")
-    if severity_mode not in SEVERITY_MODES:
-        raise ViewerInputError("Unsupported severity mode")
+        raise ViewerInputError('Unsupported severity filter')
     try:
-        source_label, service_label, program_label = (
-            validate_label_name(label) for label in (source_label, service_label, program_label)
-        )
+        host_label, source_label, service_label, program_label = (
+            validate_label_name(label) for label in
+            (host_label, source_label, service_label, program_label))
     except ValueError as err:
-        raise ViewerInputError("Invalid configured label name") from err
-    if len({host_label, source_label, service_label, program_label}) != 4:
-        raise ViewerInputError("Filter labels must be distinct")
-    fields = {
-        host_label: normalize_filter_values(host),
-        source_label: normalize_filter_values(source),
-        service_label: normalize_filter_values(service),
-        program_label: normalize_filter_values(program),
-    }
-    # No empty selector: the dashboard consistently requires a non-empty host.
+        raise ViewerInputError('Invalid label mapping') from err
+    if len({host_label, source_label, service_label, program_label, 'severity'}) != 5:
+        raise ViewerInputError('Filter labels must be distinct from severity')
+    fields = {host_label: normalize_filter_values(host),
+              source_label: normalize_filter_values(source),
+              service_label: normalize_filter_values(service),
+              program_label: normalize_filter_values(program)}
     matchers = [label_matcher(host_label, fields[host_label], require_host=True)]
     for key in (source_label, service_label, program_label):
         if matcher := label_matcher(key, fields[key]):
             matchers.append(matcher)
-    query = "{" + ",".join(matchers) + "}"
-    if severity_mode == "canonical":
-        query += " | label_format severity=`" + CANONICAL_SEVERITY_TEMPLATE + "`"
-        if pattern := SEVERITY_PATTERNS[severity]:
-            query += " | severity=~" + json.dumps(pattern)
-    elif pattern := SEVERITY_PATTERNS[severity]:
-        # Backward-compatible, less precise indexed/detected classification.
-        if severity == "warnings":
-            pattern = "(?i)warn"
-        elif severity == "errors":
-            pattern = "(?i)(error|critical|fatal)"
-        query += " | detected_level=~" + json.dumps(pattern)
+    if pattern := SEVERITY_PATTERNS[severity]:
+        matchers.append('severity=~' + json.dumps(pattern))
+    query = '{' + ','.join(matchers) + '}'
     if text := _checked_text(text, MAX_TEXT_LENGTH):
-        query += " |= " + json.dumps(text)
+        query += ' |= ' + json.dumps(text)
     if regex := _checked_text(regex, MAX_REGEX_LENGTH):
         try:
             re.compile(regex)
         except re.error as err:
-            raise ViewerInputError("Invalid regular expression") from err
-        query += " |~ " + json.dumps(regex)
+            raise ViewerInputError('Invalid regular expression') from err
+        query += ' |~ ' + json.dumps(regex)
     if len(query) > MAX_LOGQL_LENGTH:
-        raise ViewerInputError("Viewer query is too long")
+        raise ViewerInputError('Viewer query too long')
     return query
 
 

@@ -1,5 +1,5 @@
 {
-  "title": "Grafana Loki Monitor",
+  "title": "Homelab Log Monitor",
   "config": {
     "step": {
       "user": {
@@ -64,7 +64,7 @@
       "init": {
         "title": "Manage Loki Monitor",
         "menu_options": {
-          "settings": "Prometheus connection and search settings",
+          "settings": "Prometheus and advanced queries",
           "remove_query": "Remove LogQL metric sensor",
           "add_metric": "Add LogQL metric sensor",
           "test_metric": "Test LogQL metric query",
@@ -80,16 +80,13 @@
         }
       },
       "settings": {
-        "title": "Prometheus connection and Loki search settings",
-        "description": "Prometheus is the only event-count source for fleet, host and service sensors. Loki remains available for raw logs, custom LogQL queries and message-level alerts. Change the Prometheus URL here; no counter-backend switch exists.",
+        "title": "Prometheus and advanced queries",
+        "description": "All severity groups come from Alloy indexed labels. Prometheus provides every count. User-authored LogQL metrics poll only when explicitly enabled. Log viewing and message-based alerting remain Loki-backed.",
         "data": {
+          "prometheus_url": "Prometheus server URL",
           "poll_seconds": "Polling interval (seconds)",
-          "level_label": "Indexed severity label (indexed mode)",
-          "host_label": "Host label name",
-          "error_levels": "Indexed error values (indexed mode only)",
-          "warn_levels": "Indexed warning values (indexed mode only)",
-          "severity_source": "Loki classification for last-error search (not counts)",
-          "prometheus_url": "Prometheus base URL (required)"
+          "host_label": "Host label for Loki discovery",
+          "poll_custom_queries": "Poll custom user-authored LogQL sensors (can be expensive)"
         }
       },
       "remove_query": {
@@ -133,7 +130,7 @@
       },
       "add_monitor": {
         "title": "Add a host/service monitor",
-        "description": "Add a host or host/service monitor. Four Prometheus-backed error and warning sensors are created for 1-hour and 24-hour intervals.",
+        "description": "Create one compact host or host/service summary sensor, with 1h/24h severity counts in attributes.",
         "data": {
           "monitor_name": "Monitor name",
           "monitor_host": "Host",
@@ -163,7 +160,7 @@
       },
       "add_alert": {
         "title": "Add a Loki alert rule",
-        "description": "Emit a loki_monitor_alert event when new matching logs meet the count threshold. Existing logs do not trigger an alert when the rule is created. For reliability, choose a window at least as long as the poll interval.",
+        "description": "Indexed Alloy severity; bounded Loki log search (at most 100 matching entries), no count_over_time. Alerts fire only on new matching messages.",
         "data": {
           "name": "Rule name",
           "enabled": "Enabled",
@@ -213,7 +210,7 @@
       },
       "test_alert": {
         "title": "Preview a Loki alert rule",
-        "description": "Count matching logs now without firing any event. Matches in the selected window: {count}",
+        "description": "Run a bounded log search without firing events. Returns up to the threshold matching logs: {count}",
         "data": {
           "name": "Rule name",
           "enabled": "Enabled",
@@ -232,7 +229,7 @@
       },
       "add_hosts": {
         "title": "Add multiple watched hosts",
-        "description": "Add multiple hosts in one save and one reload. Each selected host receives four Prometheus-backed error/warning sensors.",
+        "description": "Select hosts in one operation; each gets one summary sensor. Only one integration reload.",
         "data": {
           "monitor_hosts": "Hosts to monitor"
         }
@@ -248,7 +245,7 @@
       "monitor_limit": "The maximum of 64 monitors would be exceeded.",
       "duplicate_monitor": "A monitor with this name or host/service combination already exists.",
       "duplicate_or_limit_alert": "A rule with this name exists, or the maximum of 12 alert rules has been reached.",
-      "invalid_alert": "Invalid rule settings or Loki query. Verify the values, severity, regex and numeric limits.",
+      "invalid_alert": "Invalid rule or query. Alert threshold must be from 1 to 100.",
       "invalid_prometheus": "Prometheus URL is invalid or the API connection test failed.",
       "no_hosts": "No hosts found in Loki over 30 days. Add one manually or check the connection."
     }

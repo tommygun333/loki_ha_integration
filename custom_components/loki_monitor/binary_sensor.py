@@ -1,67 +1,35 @@
-"""Connectivity and label-mapping diagnostic binary sensors."""
-
-from __future__ import annotations
-
+"""Minimal integration availability indicator. No Loki label polling."""
 from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
 from .entity import LokiEntity
 
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
-) -> None:
-    """Set up diagnostic sensors."""
-    coordinator = entry.runtime_data.coordinator
-    async_add_entities(
-        [
-            LokiConnectivity(coordinator, entry.entry_id),
-            LokiDiagnostic(coordinator, entry.entry_id, "severity_label_present", "Indexed severity label present (optional)"),
-            LokiDiagnostic(coordinator, entry.entry_id, "host_label_present", "Host label detected"),
-        ]
-    )
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    async_add_entities([LokiConnectivity(entry.runtime_data.coordinator, entry.entry_id)])
+    # Remove old label-detection diagnostics from this config entry alone.
+    from homeassistant.helpers import entity_registry as er
+    registry = er.async_get(hass)
+    obsolete = {f"{entry.entry_id}_severity_label_present", f"{entry.entry_id}_host_label_present"}
+    for item in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if item.domain == 'binary_sensor' and item.platform == 'loki_monitor' and item.unique_id in obsolete:
+            registry.async_remove(item.entity_id)
 
 
 class LokiConnectivity(LokiEntity, BinarySensorEntity):
-    """Stay available and switch off when coordinator reports a failed poll."""
-
-    _attr_name = "API available"
+    _attr_name = 'Counter backend available'
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_icon = "mdi:connection"
+    _attr_icon = 'mdi:connection'
 
-    def __init__(self, coordinator, entry_id: str) -> None:
-        super().__init__(coordinator, entry_id, "api_available")
+    def __init__(self, coordinator, entry_id):
+        super().__init__(coordinator, entry_id, 'api_available')
 
     @property
-    def available(self) -> bool:
+    def available(self):
         return True
 
     @property
-    def is_on(self) -> bool:
-        return self.coordinator.last_update_success
-
-
-class LokiDiagnostic(LokiEntity, BinarySensorEntity):
-    """Show whether configured host/severity label names exist in Loki."""
-
-    _attr_icon = "mdi:tag-check"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator, entry_id: str, key: str, name: str) -> None:
-        super().__init__(coordinator, entry_id, key)
-        self._attr_name = name
-
-    @property
-    def available(self) -> bool:
-        return (
-            super().available
-            and self.coordinator.data is not None
-            and self.key not in self.coordinator.data.get("failed_queries", [])
-        )
-
-    @property
-    def is_on(self) -> bool | None:
-        return self.coordinator.data.get(self.key)
+    def is_on(self):
+        return self.coordinator.last_update_success and bool(
+            (self.coordinator.data or {}).get('prometheus_available', False))

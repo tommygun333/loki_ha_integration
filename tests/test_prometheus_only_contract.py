@@ -1,32 +1,26 @@
-"""Static regression tests: the count backend and configuration must be explicit."""
-
+"""Count-only Prometheus and explicitly on-demand Loki guarantees."""
 import ast
 from pathlib import Path
+BASE=Path(__file__).resolve().parents[1]/'custom_components'/'loki_monitor'
 
-BASE = Path(__file__).resolve().parents[1] / 'custom_components' / 'loki_monitor'
+def test_forms_keep_prometheus_required_and_bulk_hosts():
+    text=(BASE/'config_flow.py').read_text()
+    assert 'vol.Required(CONF_PROMETHEUS_URL' in text
+    assert 'CONF_PROMETHEUS_URL: validate_prometheus_url' in text
+    assert 'async def async_step_add_hosts' in text
+    assert "poll_custom_queries" in text
+    assert "vol.Required(CONF_SEVERITY_SOURCE" not in text
 
-
-def test_prometheus_url_is_in_initial_and_options_forms():
-    flow = (BASE / 'config_flow.py').read_text(encoding='utf-8')
-    assert 'vol.Required(CONF_PROMETHEUS_URL' in flow
-    assert 'CONF_PROMETHEUS_URL: validate_prometheus_url' in flow
-    assert 'await PrometheusClient(' in flow
-    assert 'COUNTER_BACKEND_PROMETHEUS' not in flow.split('    async def async_step_settings')[1].split('    def _metric_schema')[0]
-    assert 'async_step_add_hosts' in flow
-
-
-def test_no_loki_event_count_in_coordinator():
-    code = (BASE / 'coordinator.py').read_text(encoding='utf-8')
-    tree = ast.parse(code)
-    assert 'count_query(' not in code
-    assert 'count_over_time' not in code.replace('count_over_time/rate', '')
-    assert 'async_counter_window("1h")' in code
-    assert 'async_counter_window("24h")' in code
-    assert 'async_recent_logs(' in code
-    assert 'self.api.async_query(' in code  # only user-defined custom LogQL
-
+def test_no_automatic_loki_metrics_in_coordinator():
+    src=(BASE/'coordinator.py').read_text()
+    ast.parse(src)
+    assert 'count_query(' not in src
+    assert 'async_recent_logs' not in src
+    assert 'async_labels()' not in src
+    assert "self.prometheus.async_counter_window('1h')" in src
+    assert "self.prometheus.async_counter_window('24h')" in src
 
 def test_prometheus_mandatory_at_startup():
-    text = (BASE / '__init__.py').read_text(encoding='utf-8')
-    assert 'if entry.options.get(CONF_COUNTER_BACKEND)' not in text
-    assert 'prometheus = PrometheusClient(' in text
+    src=(BASE/'__init__.py').read_text()
+    assert 'prometheus = PrometheusClient(' in src
+    assert 'if entry.options.get(CONF_COUNTER_BACKEND)' not in src

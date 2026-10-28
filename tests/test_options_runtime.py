@@ -95,6 +95,10 @@ def flow(monkeypatch):
                 raise module.LokiQueryError("bad query")
             return {"resultType":"vector", "result":[{"value":[100,"42"]}]}
 
+        async def async_query_streams_ns(self, query, *, start_ns, end_ns, limit):
+            return {"resultType":"streams", "result":[{"stream":{"host":"CoreELEC"},
+                "values":[[str(end_ns-i-1),f"log {i}"] for i in range(limit)]}]}
+
         async def async_label_values(self, label, since="1h"):
             return ["CoreELEC", "pve"] if label == "host" else ["kodi", "nginx"]
 
@@ -178,7 +182,7 @@ async def test_alert_forms_add_edit_preview_remove_preserve_rules(flow):
     assert edited["data"]["alert_rules"][0]["threshold"] == 4
     tested = await flow.async_step_test_alert(base)
     assert tested["step_id"] == "test_alert"
-    assert tested["description_placeholders"]["count"] == "42"
+    assert tested["description_placeholders"]["count"] == "3"
     invalid = await flow.async_step_add_alert({**base,"regex":"["})
     assert invalid["errors"]["base"] == "invalid_alert"
     flow.config_entry.options = edited["data"]

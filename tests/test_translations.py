@@ -41,7 +41,7 @@ def test_options_severity_mode_translation_present_and_consistent():
     source = json.loads((COMPONENT_DIR / "strings.json").read_text())
     active = json.loads((COMPONENT_DIR / "translations/en.json").read_text())
     assert source["options"]["step"]["settings"] == active["options"]["step"]["settings"]
-    assert "severity_source" in active["options"]["step"]["settings"]["data"]
+    assert "poll_custom_queries" in active["options"]["step"]["settings"]["data"]
 
 
 def test_numeric_query_form_uses_fresh_translation_key():

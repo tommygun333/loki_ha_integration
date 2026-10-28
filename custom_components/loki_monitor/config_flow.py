@@ -248,51 +248,35 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         return self.async_show_menu(step_id="init", menu_options=choices)
 
     async def async_step_settings(self, user_input=None) -> ConfigFlowResult:
-        """Update Prometheus address and Loki-only severity/search preferences."""
+        """Prometheus connection and optional user-authored LogQL polling."""
         opts = self.config_entry.options
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                validate_label_name(user_input[CONF_HOST_LABEL])
-                level_selector(user_input[CONF_LEVEL_LABEL], user_input[CONF_ERROR_LEVELS])
-                level_selector(user_input[CONF_LEVEL_LABEL], user_input[CONF_WARN_LEVELS])
-            except (ValueError, KeyError):
-                errors["base"] = "invalid_labels"
+                url = validate_prometheus_url(user_input[CONF_PROMETHEUS_URL])
+                await PrometheusClient(
+                    async_get_clientsession(self.hass, verify_ssl=self.config_entry.data.get(CONF_VERIFY_SSL, True)),
+                    url,
+                ).async_test_connection()
+            except (PrometheusError, ValueError, KeyError):
+                errors['base'] = 'invalid_prometheus'
             else:
-                try:
-                    url = validate_prometheus_url(user_input.get(CONF_PROMETHEUS_URL, ""))
-                    await PrometheusClient(
-                        async_get_clientsession(
-                            self.hass, verify_ssl=self.config_entry.data.get(CONF_VERIFY_SSL, True)
-                        ), url,
-                    ).async_test_connection()
-                    user_input[CONF_PROMETHEUS_URL] = url
-                except (PrometheusError, ValueError):
-                    errors["base"] = "invalid_prometheus"
-                else:
-                    # Do not persist obsolete backend choice; all event counters
-                    # now use Prometheus, irrespective of v0.5.0 options.
-                    updated = {**opts, **user_input}
-                    updated.pop(CONF_COUNTER_BACKEND, None)
-                    return self.async_create_entry(data=updated)
+                # Drop the obsolete severity backend choices; Alloy owns this.
+                updated = {k:v for k,v in opts.items() if k not in (
+                    CONF_COUNTER_BACKEND, CONF_SEVERITY_SOURCE, CONF_LEVEL_LABEL,
+                    CONF_ERROR_LEVELS, CONF_WARN_LEVELS)}
+                updated.update(user_input)
+                updated[CONF_PROMETHEUS_URL] = url
+                return self.async_create_entry(data=updated)
         schema = vol.Schema({
             vol.Required(CONF_PROMETHEUS_URL, default=opts.get(
-                CONF_PROMETHEUS_URL, self.config_entry.data.get(CONF_PROMETHEUS_URL, "")
-            )): str,
+                CONF_PROMETHEUS_URL, self.config_entry.data.get(CONF_PROMETHEUS_URL, ''))): str,
             vol.Required(CONF_POLL_SECONDS, default=opts.get(CONF_POLL_SECONDS, DEFAULT_POLL_SECONDS)):
                 vol.All(vol.Coerce(int), vol.Range(min=MIN_POLL_SECONDS, max=MAX_POLL_SECONDS)),
-            vol.Required(CONF_SEVERITY_SOURCE, default=opts.get(CONF_SEVERITY_SOURCE, DEFAULT_SEVERITY_SOURCE)):
-                vol.In({
-                    SEVERITY_SOURCE_DETECTED: "Loki detected level (last-error search only)",
-                    SEVERITY_SOURCE_INDEXED: "Indexed Loki label (last-error search only)",
-                    SEVERITY_SOURCE_CANONICAL: "Canonical severity (last-error search only)",
-                }),
-            vol.Required(CONF_LEVEL_LABEL, default=opts.get(CONF_LEVEL_LABEL, DEFAULT_LEVEL_LABEL)): str,
             vol.Required(CONF_HOST_LABEL, default=opts.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL)): str,
-            vol.Required(CONF_ERROR_LEVELS, default=opts.get(CONF_ERROR_LEVELS, DEFAULT_ERROR_LEVELS)): str,
-            vol.Required(CONF_WARN_LEVELS, default=opts.get(CONF_WARN_LEVELS, DEFAULT_WARN_LEVELS)): str,
+            vol.Required('poll_custom_queries', default=opts.get('poll_custom_queries', False)): bool,
         })
-        return self.async_show_form(step_id="settings", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id='settings', data_schema=schema, errors=errors)
 
     def _metric_schema(self, current: dict | None = None) -> vol.Schema:
         current = current or {}
@@ -453,15 +437,12 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         })
 
     async def _validate_monitor(self, monitor: dict) -> str | None:
-        """Validate a selector without issuing expensive Loki count queries.
-
-        A service can legitimately have no samples in the current Prometheus
-        window, so it is accepted without a forced nonzero query.
-        """
+        """Local selector validation: no historical Loki count query on save."""
         try:
-            clean_monitor(monitor["name"], monitor["host"], monitor.get("service", ""))
-        except (KeyError, TypeError, ValueError):
-            return "invalid_monitor"
+            monitor_selector(monitor, host_label=self.config_entry.options.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL),
+                             severity='error')
+        except (KeyError, ValueError, TypeError):
+            return 'invalid_monitor'
         return None
 
     async def async_step_add_monitor(self, user_input=None) -> ConfigFlowResult:
@@ -621,13 +602,13 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
             vol.Required("severity", default=current["severity"]): vol.In({
                 "all": "All levels", "errors": "High severity (emergency to error)",
                 "warnings": "Warnings", "emergency": "Emergency", "alert": "Alert",
-                "critical": "Critical", "fatal": "Fatal", "error": "Error", "warning": "Warning",
+                "critical": "Critical", "fatal": "Fatal", "error": "Error", "warning": "Warning", "normal": "Normal (notice/info/debug/trace)",
                 "notice": "Notice", "info": "Info", "debug": "Debug", "trace": "Trace", "unknown": "Unknown",
             }),
             vol.Optional("text", default=current["text"]): str,
             vol.Optional("regex", default=current["regex"]): str,
             vol.Required("threshold", default=current["threshold"]):
-                vol.All(vol.Coerce(int), vol.Range(min=1, max=10000)),
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
             vol.Required("window_minutes", default=current["window_minutes"]):
                 vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
             vol.Required("cooldown_minutes", default=current["cooldown_minutes"]):

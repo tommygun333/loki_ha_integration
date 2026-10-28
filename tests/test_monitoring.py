@@ -1,55 +1,20 @@
-"""Validate scoped LogQL, escaping and monitor constraints."""
-
+"""Scope and input sanitization after removing legacy severity reconstruction."""
 import pytest
+from loki_monitor.monitoring import clean_monitor,monitor_selector,MAX_MONITORS
 
-from loki_monitor.monitoring import clean_monitor, monitor_selector
+def test_clean_valid_monitor():
+    assert clean_monitor(' Kodi ',' CoreELEC ',' kodi ')=={'name':'Kodi','host':'CoreELEC','service':'kodi'}
 
+def test_malformed_values_rejected():
+    for args in [('bad\n','pve',''),('ok','',''),('x'*129,'pve','')]:
+        with pytest.raises(ValueError):clean_monitor(*args)
 
-def make(mon=None, **kwargs):
-    return monitor_selector(
-        mon or {"host": "CoreELEC", "service": "kodi", "name": "Kodi"},
-        host_label=kwargs.get("host_label", "host"),
-        severity_source=kwargs.get("severity_source", "detected"),
-        level_label=kwargs.get("level_label", "level"),
-        severity_values=kwargs.get("severity_values", "warn,warning"),
-        severity=kwargs.get("severity", "warn"),
-    )
+def test_direct_indexed_label_scope():
+    q=monitor_selector({'host':'CoreELEC','service':'kodi'},severity='error')
+    assert q=='{host="CoreELEC",service_name="kodi",severity=~"^(emergency|alert|critical|fatal|error)$"}'
+    assert monitor_selector({'host':'pve','service':''},severity='warn')=='{host="pve",severity="warning"}'
 
-
-def test_detected_scope_host_service():
-    assert make() == '{host="CoreELEC",service_name="kodi"} | detected_level=~"(?i)warn"'
-    assert make(severity="error").endswith('detected_level=~"(?i)(error|critical|fatal)"')
-
-
-def test_host_only_no_service_selector():
-    assert make({"name": "pve", "host": "pve", "service": ""}) == (
-        '{host="pve"} | detected_level=~"(?i)warn"'
-    )
-
-
-def test_untrusted_values_are_quoted_not_executed():
-    q = make({"name": "test", "host": 'foo",job="other', "service": 'service" or {job="*'})
-    assert r'host="foo\",job=\"other"' in q
-    assert r'service_name="service\" or {job=\"*"' in q
-    assert q.count("} | detected_level") == 1
-
-
-def test_custom_host_label_and_indexed_scope():
-    assert make(host_label="device", severity_source="indexed", level_label="sev", severity_values="Warning,alert") == (
-        '{device="CoreELEC",service_name="kodi",sev=~"(?i)(Warning|alert)"}'
-    )
-
-
-def test_reject_bad_label_names_and_values():
-    with pytest.raises(ValueError):
-        make(host_label="host-x")
-    with pytest.raises(ValueError):
-        clean_monitor("bad\nmonitor", "host")
-    with pytest.raises(ValueError):
-        clean_monitor("name", "")
-    with pytest.raises(ValueError):
-        clean_monitor("n" * 129, "host")
-
-
-def test_monitor_cleanup_and_optional_service():
-    assert clean_monitor("  PVE  ", " pve ") == {"name":"PVE", "host":"pve", "service":""}
+def test_host_escaping_and_limit():
+    q=monitor_selector({'host':'foo",severity="info','service':''})
+    assert 'host="foo\\",severity=\\"info"' in q
+    assert MAX_MONITORS>=64

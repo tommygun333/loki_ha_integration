@@ -13,7 +13,7 @@ import re
 import time
 from typing import Any
 
-from .logic import count_query, extract_number, flatten_streams
+from .logic import flatten_streams
 from .viewer import SEVERITY_PATTERNS, ViewerInputError, build_viewer_query
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def clean_rule(values: dict[str, Any]) -> dict[str, Any]:
     if merged["severity"] not in SEVERITY_PATTERNS:
         raise ValueError("Invalid severity")
     result["severity"] = merged["severity"]
-    for key, lo, hi in (("threshold", 1, 10000), ("window_minutes", 1, 1440),
+    for key, lo, hi in (("threshold", 1, 100), ("window_minutes", 1, 1440),
                         ("cooldown_minutes", 0, 10080)):
         number = merged[key]
         if isinstance(number, bool) or not isinstance(number, int) or not lo <= number <= hi:
@@ -78,21 +78,25 @@ def clean_rule(values: dict[str, Any]) -> dict[str, Any]:
 
 
 def make_rule_query(rule: dict[str, Any], host_label: str = "host") -> str:
-    """Use exactly the Grafana v1.9 canonical severity logic."""
+    """Use normalized indexed Alloy severity (no per-query detection)."""
     return build_viewer_query(
         host_label=host_label,
         host=rule.get("host", ""), source=rule.get("source", ""),
         service=rule.get("service", ""), program=rule.get("program", ""),
         severity=rule.get("severity", "errors"), text=rule.get("text", ""),
-        regex=rule.get("regex", ""), severity_mode="canonical",
+        regex=rule.get("regex", ""), severity_mode="indexed",
     )
 
 
-async def test_alert_rule(api, rule: dict[str, Any], host_label: str = "host") -> float:
-    """Preview window count without firing events or touching checkpoints."""
-    query = count_query(make_rule_query(rule, host_label), f"{rule['window_minutes']}m")
-    count = extract_number(await api.async_query(query), empty_is_zero=True)
-    return count or 0
+async def test_alert_rule(api, rule: dict[str, Any], host_label: str = 'host') -> float:
+    """Preview bounded matching records, capped at the configured threshold."""
+    now_ns = time.time_ns()
+    result = await api.async_query_streams_ns(
+        make_rule_query(rule, host_label),
+        start_ns=max(0, now_ns - rule['window_minutes'] * _NS_MINUTE),
+        end_ns=now_ns, limit=rule['threshold'],
+    )
+    return float(len(flatten_streams(result, rule['threshold'])))
 
 
 class LokiAlertEngine:
@@ -180,20 +184,22 @@ class LokiAlertEngine:
         window_ns = rule["window_minutes"] * _NS_MINUTE
         start_ns = max(0, now_ns - window_ns)
         query = make_rule_query(rule, self.host_label)
+        # One bounded Loki stream query replaces the old count_over_time scan.
+        # We only need to establish whether threshold matching lines exist.
+        if not 1 <= rule['threshold'] <= 100:
+            raise ValueError('Alert threshold must be between 1 and 100')
         recent = await self.api.async_query_streams_ns(
-            query, start_ns=start_ns, end_ns=now_ns, limit=1
+            query, start_ns=start_ns, end_ns=now_ns, limit=rule['threshold']
         )
-        items = flatten_streams(recent, 1)
+        items = flatten_streams(recent, rule['threshold'])
         if not items:
             return None
-        newest = int(items[0]["timestamp_ns"])
-        if newest <= state["seen_ns"]:
+        newest = int(items[0]['timestamp_ns'])
+        if newest <= state['seen_ns']:
             return None
-        # Count only after new activity, not continuously during cooldown.
-        count = await test_alert_rule(self.api, rule, self.host_label)
-        # Do not reprocess these logs on the next pass, even below threshold.
-        state["seen_ns"] = newest
-        if count < rule["threshold"]:
+        state['seen_ns'] = newest
+        count = len(items)  # lower bound, capped at threshold
+        if count < rule['threshold']:
             return None
         if now_ns < state["fired_ns"] + rule["cooldown_minutes"] * _NS_MINUTE:
             return None
