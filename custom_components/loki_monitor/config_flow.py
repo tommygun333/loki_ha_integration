@@ -23,8 +23,6 @@ from .const import (
     CONF_CUSTOM_QUERIES,
     CONF_COUNTER_BACKEND,
     CONF_PROMETHEUS_URL,
-    COUNTER_BACKEND_LOKI,
-    COUNTER_BACKEND_PROMETHEUS,
     CONF_ERROR_LEVELS,
     CONF_HOST_LABEL,
     CONF_ICON,
@@ -75,6 +73,7 @@ def connection_schema(data: dict[str, Any] | None = None) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(CONF_URL, default=data.get(CONF_URL, "http://localhost:3100")): str,
+            vol.Required(CONF_PROMETHEUS_URL, default=data.get(CONF_PROMETHEUS_URL, "")): str,
             vol.Required(CONF_AUTH_TYPE, default=data.get(CONF_AUTH_TYPE, AUTH_NONE)): vol.In(AUTH_TYPES),
             vol.Optional(CONF_USERNAME): str,
             vol.Optional(CONF_PASSWORD): _PASSWORD_SELECTOR,
@@ -89,6 +88,7 @@ def scrub_config(data: dict[str, Any]) -> dict[str, Any]:
     """Validate and retain only fields needed for selected authentication."""
     cleaned = {
         CONF_URL: validate_url(data[CONF_URL]),
+        CONF_PROMETHEUS_URL: validate_prometheus_url(data[CONF_PROMETHEUS_URL]),
         CONF_AUTH_TYPE: data[CONF_AUTH_TYPE],
         CONF_VERIFY_SSL: data[CONF_VERIFY_SSL],
     }
@@ -119,6 +119,13 @@ async def _check_loki(hass, data: dict[str, Any]) -> str | None:
         return "invalid_response"
     except LokiError:
         return "cannot_connect"
+    try:
+        await PrometheusClient(
+            async_get_clientsession(hass, verify_ssl=data[CONF_VERIFY_SSL]),
+            data[CONF_PROMETHEUS_URL],
+        ).async_test_connection()
+    except (PrometheusError, ValueError):
+        return "invalid_prometheus"
     return None
 
 
@@ -241,14 +248,18 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         return self.async_show_menu(step_id="init", menu_options=choices)
 
     async def async_step_settings(self, user_input=None) -> ConfigFlowResult:
+        """Update Prometheus address and Loki-only severity/search preferences."""
+        opts = self.config_entry.options
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
                 validate_label_name(user_input[CONF_HOST_LABEL])
                 level_selector(user_input[CONF_LEVEL_LABEL], user_input[CONF_ERROR_LEVELS])
                 level_selector(user_input[CONF_LEVEL_LABEL], user_input[CONF_WARN_LEVELS])
-                backend = user_input.get(CONF_COUNTER_BACKEND, COUNTER_BACKEND_LOKI)
-                if backend == COUNTER_BACKEND_PROMETHEUS:
+            except (ValueError, KeyError):
+                errors["base"] = "invalid_labels"
+            else:
+                try:
                     url = validate_prometheus_url(user_input.get(CONF_PROMETHEUS_URL, ""))
                     await PrometheusClient(
                         async_get_clientsession(
@@ -256,27 +267,25 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
                         ), url,
                     ).async_test_connection()
                     user_input[CONF_PROMETHEUS_URL] = url
-            except ValueError:
-                errors["base"] = "invalid_prometheus" if user_input.get(
-                    CONF_COUNTER_BACKEND
-                ) == COUNTER_BACKEND_PROMETHEUS else "invalid_labels"
-            except PrometheusError:
-                errors["base"] = "invalid_prometheus"
-            else:
-                return self.async_create_entry(data={**self.config_entry.options, **user_input})
-        opts = self.config_entry.options
+                except (PrometheusError, ValueError):
+                    errors["base"] = "invalid_prometheus"
+                else:
+                    # Do not persist obsolete backend choice; all event counters
+                    # now use Prometheus, irrespective of v0.5.0 options.
+                    updated = {**opts, **user_input}
+                    updated.pop(CONF_COUNTER_BACKEND, None)
+                    return self.async_create_entry(data=updated)
         schema = vol.Schema({
+            vol.Required(CONF_PROMETHEUS_URL, default=opts.get(
+                CONF_PROMETHEUS_URL, self.config_entry.data.get(CONF_PROMETHEUS_URL, "")
+            )): str,
             vol.Required(CONF_POLL_SECONDS, default=opts.get(CONF_POLL_SECONDS, DEFAULT_POLL_SECONDS)):
                 vol.All(vol.Coerce(int), vol.Range(min=MIN_POLL_SECONDS, max=MAX_POLL_SECONDS)),
-            vol.Required(CONF_COUNTER_BACKEND, default=opts.get(CONF_COUNTER_BACKEND, COUNTER_BACKEND_LOKI)):
-                vol.In({COUNTER_BACKEND_LOKI: "Loki (existing behavior)",
-                        COUNTER_BACKEND_PROMETHEUS: "Prometheus (host-only counters)"}),
-            vol.Optional(CONF_PROMETHEUS_URL, default=opts.get(CONF_PROMETHEUS_URL, "")): str,
             vol.Required(CONF_SEVERITY_SOURCE, default=opts.get(CONF_SEVERITY_SOURCE, DEFAULT_SEVERITY_SOURCE)):
                 vol.In({
-                    SEVERITY_SOURCE_DETECTED: "Grafana Loki detected severity (dashboard-compatible)",
-                    SEVERITY_SOURCE_INDEXED: "Indexed level label (previous behavior)",
-                    SEVERITY_SOURCE_CANONICAL: "Grafana v1.9 canonical severity (indexed → detected → log marker)",
+                    SEVERITY_SOURCE_DETECTED: "Loki detected level (last-error search only)",
+                    SEVERITY_SOURCE_INDEXED: "Indexed Loki label (last-error search only)",
+                    SEVERITY_SOURCE_CANONICAL: "Canonical severity (last-error search only)",
                 }),
             vol.Required(CONF_LEVEL_LABEL, default=opts.get(CONF_LEVEL_LABEL, DEFAULT_LEVEL_LABEL)): str,
             vol.Required(CONF_HOST_LABEL, default=opts.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL)): str,
@@ -444,21 +453,14 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         })
 
     async def _validate_monitor(self, monitor: dict) -> str | None:
-        """Ensure monitor LogQL parses before saving it."""
-        options = self.config_entry.options
+        """Validate a selector without issuing expensive Loki count queries.
+
+        A service can legitimately have no samples in the current Prometheus
+        window, so it is accepted without a forced nonzero query.
+        """
         try:
-            scoped = monitor_selector(
-                monitor,
-                host_label=options.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL),
-                severity_source=options.get(CONF_SEVERITY_SOURCE, DEFAULT_SEVERITY_SOURCE),
-                level_label=options.get(CONF_LEVEL_LABEL, DEFAULT_LEVEL_LABEL),
-                severity_values=options.get(CONF_WARN_LEVELS, DEFAULT_WARN_LEVELS),
-                severity="warn",
-            )
-            extract_number(await self._client().async_query(count_query(scoped, "1h")))
-        except LokiAuthError:
-            return "invalid_auth"
-        except (LokiError, ValueError, TypeError):
+            clean_monitor(monitor["name"], monitor["host"], monitor.get("service", ""))
+        except (KeyError, TypeError, ValueError):
             return "invalid_monitor"
         return None
 

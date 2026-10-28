@@ -109,7 +109,7 @@ class LokiMetricSensor(LokiEntity, SensorEntity):
     def native_value(self) -> int | float | datetime | None:
         value = self.coordinator.data.get(self.key)
         if self.key in ("errors_1h", "errors_24h", "warnings_1h", "warnings_24h"):
-            return int(value) if value is not None else None
+            return max(0, round(float(value))) if value is not None else None
         return value
 
     @property
@@ -171,7 +171,7 @@ class LokiMonitorSensor(LokiEntity, SensorEntity):
     @property
     def native_value(self) -> int | None:
         value = self.coordinator.data.get(self.key)
-        return int(value) if value is not None else None
+        return max(0, round(float(value))) if value is not None else None
 
     @property
     def extra_state_attributes(self) -> dict:

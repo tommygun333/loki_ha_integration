@@ -1,92 +1,104 @@
-"""Optional Prometheus reader for low-cardinality Alloy service counters.
+"""Prometheus-only event counter backend for Alloy's per-service counters.
 
-Host-only/built-in severity statistics can use this cheap API; log searches,
-alert rules, last error and service-scoped monitors remain Loki-backed.
+Two grouped instant queries (1h/24h) feed every fleet, host and service count.
+Log searches and message-based alerts intentionally remain in Loki.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
-METRIC = 'homelab_log_service_events_total'
-COUNTER_JOB = 'homelab-alloy-logs'
-COUNTER_LEVELS = ('high', 'warning')
+METRIC = "homelab_log_service_events_total"
+COUNTER_JOB = "homelab-alloy-logs"
+COUNTER_LEVELS = ("high", "warning", "normal", "unknown")
 
 
 class PrometheusError(Exception):
-    """Safe, nonsensitive Prometheus connection/query failure."""
+    """Safe Prometheus connection/query failure without request details."""
 
 
 def validate_prometheus_url(url: str) -> str:
-    """Accept a server root, never userinfo, query parameters or fragments."""
-    url = url.strip().rstrip('/')
+    """Require a Prometheus server URL, not the Grafana web UI or API URL."""
+    url = url.strip().rstrip("/")
     parsed = urlsplit(url)
-    if (parsed.scheme not in ('http', 'https') or not parsed.hostname
-            or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or parsed.path not in ('', '/')):
-        raise ValueError('Expected a Prometheus base URL, without path or credentials')
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in ("", "/")
+    ):
+        raise ValueError("Expected http(s) Prometheus base URL without path or credentials")
     return url
 
 
-def host_severity_query(window: str) -> str:
-    """Same first-observed-sample correction as primary dashboard v2.5.3.
+def service_severity_query(window: str) -> str:
+    """First-sample corrected grouped count, matching Grafana v2.5.3.
 
-    Compensates for the first sample of a newly appearing counter series, when
-    the series did not exist at the beginning of the requested range. As with
-    Grafana, resets and sparse scrapes can make the estimate imperfect.
+    Corrects newly appearing counter series when no sample exists at the
+    start of the window. It is still an approximation across counter resets,
+    stale series, scrape gaps, and lookback boundaries.
     """
-    if window not in ('1h', '24h'):
-        raise ValueError('Unsupported counter window')
-    selector = (
-        METRIC + '{job="' + COUNTER_JOB + '",severity_group=~"high|warning"}'
+    if window not in ("1h", "24h"):
+        raise ValueError("Unsupported counter window")
+    selector = f'{METRIC}{{job="{COUNTER_JOB}"}}'
+    minimum = f"min_over_time({selector}[{window}])"
+    delta = f"increase({selector}[{window}])"
+    corrected = (
+        f"(({delta} or (0 * {minimum})) + "
+        f"(({minimum} unless {selector} offset {window}) or (0 * {minimum})))"
     )
-    minimum = f'min_over_time({selector}[{window}])'
-    delta = f'increase({selector}[{window}])'
-    per_series = (
-        f'(({delta} or (0 * {minimum})) + '
-        f'(({minimum} unless {selector} offset {window}) or (0 * {minimum})))'
-    )
-    return f'sum by (host, severity_group) ({per_series})'
+    return f"sum by (host, service_name, severity_group) ({corrected})"
 
 
-def parse_host_severity_vector(data: Any) -> dict[tuple[str, str], float]:
-    """Require valid vectors; never silently convert API failures to zero."""
-    if not isinstance(data, dict) or data.get('status') != 'success':
-        raise PrometheusError('Prometheus query was unsuccessful')
-    block = data.get('data')
-    if not isinstance(block, dict) or block.get('resultType') != 'vector':
-        raise PrometheusError('Prometheus did not return an instant vector')
-    vector = block.get('result')
-    if not isinstance(vector, list):
-        raise PrometheusError('Invalid Prometheus result')
-    result = {}
+def parse_service_severity_vector(data: Any) -> dict[tuple[str, str, str], float]:
+    """Validate one Prometheus response; never interpret errors as zero."""
+    if not isinstance(data, dict) or data.get("status") != "success":
+        raise PrometheusError("Prometheus query was unsuccessful")
+    block = data.get("data")
+    if not isinstance(block, dict) or block.get("resultType") != "vector":
+        raise PrometheusError("Prometheus did not return an instant vector")
+    vector = block.get("result")
+    if not isinstance(vector, list) or not vector:
+        raise PrometheusError("No Alloy service-counter samples in the requested window")
+    result: dict[tuple[str, str, str], float] = {}
     for series in vector:
-        if not isinstance(series, dict) or not isinstance(series.get('metric'), dict):
-            raise PrometheusError('Invalid Prometheus series')
-        labels: Mapping[str, str] = series['metric']
-        host, level = labels.get('host'), labels.get('severity_group')
-        value = series.get('value')
-        if not isinstance(host, str) or not host or level not in COUNTER_LEVELS:
-            raise PrometheusError('Unexpected Prometheus metric labels')
+        if not isinstance(series, dict) or not isinstance(series.get("metric"), dict):
+            raise PrometheusError("Invalid Prometheus series")
+        labels: Mapping[str, str] = series["metric"]
+        host, service, level = (
+            labels.get("host"), labels.get("service_name", ""),
+            labels.get("severity_group"),
+        )
+        value = series.get("value")
+        if (not isinstance(host, str) or not host
+                or not isinstance(service, str)
+                or level not in COUNTER_LEVELS):
+            raise PrometheusError("Unexpected Prometheus service-counter labels")
         if not isinstance(value, list) or len(value) != 2:
-            raise PrometheusError('Invalid Prometheus sample')
+            raise PrometheusError("Invalid Prometheus sample")
         try:
             number = float(value[1])
         except (TypeError, ValueError) as err:
-            raise PrometheusError('Invalid Prometheus sample value') from err
-        import math
+            raise PrometheusError("Invalid Prometheus sample value") from err
         if not math.isfinite(number) or number < -0.001:
-            raise PrometheusError('Invalid Prometheus count value')
-        result[(host, level)] = max(0.0, number)
+            raise PrometheusError("Invalid Prometheus count value")
+        key = (host, service, level)
+        result[key] = result.get(key, 0.0) + max(0.0, number)
     return result
 
 
 class PrometheusClient:
+    """Small unauthenticated Prometheus HTTP API client for a trusted LAN."""
+
     def __init__(self, session: ClientSession, base_url: str) -> None:
         self._session = session
         self._url = validate_prometheus_url(base_url)
@@ -94,26 +106,36 @@ class PrometheusClient:
     async def _query(self, query: str) -> Any:
         try:
             async with self._session.get(
-                f'{self._url}/api/v1/query',
-                params={'query': query},
+                f"{self._url}/api/v1/query",
+                params={"query": query},
                 timeout=ClientTimeout(total=25),
                 allow_redirects=False,
             ) as response:
                 if response.status != 200:
-                    raise PrometheusError(f'Prometheus returned HTTP {response.status}')
+                    raise PrometheusError(f"Prometheus returned HTTP {response.status}")
                 try:
                     return await response.json(content_type=None)
                 except (ValueError, TypeError) as err:
-                    raise PrometheusError('Invalid Prometheus JSON') from err
+                    raise PrometheusError("Invalid Prometheus JSON") from err
         except asyncio.TimeoutError as err:
-            raise PrometheusError('Prometheus request timed out') from err
+            raise PrometheusError("Prometheus request timed out") from err
         except ClientError as err:
-            raise PrometheusError('Could not connect to Prometheus') from err
+            raise PrometheusError("Could not connect to Prometheus") from err
 
     async def async_test_connection(self) -> None:
-        data = await self._query('vector(1)')
-        if not isinstance(data, dict) or data.get('status') != 'success':
-            raise PrometheusError('Prometheus query test failed')
+        """Verify PromQL is reachable and that the expected Alloy metric exists."""
+        data = await self._query(f'count({METRIC}{{job="{COUNTER_JOB}"}})')
+        if not isinstance(data, dict) or data.get("status") != "success":
+            raise PrometheusError("Prometheus query test failed")
+        block = data.get("data", {})
+        values = block.get("result", []) if isinstance(block, dict) else []
+        try:
+            found = (block.get("resultType") == "vector"
+                     and len(values) == 1 and float(values[0]["value"][1]) > 0)
+        except (TypeError, ValueError, KeyError, IndexError):
+            found = False
+        if not found:
+            raise PrometheusError("Expected Alloy service counters were not found")
 
-    async def async_counter_window(self, window: str) -> dict[tuple[str, str], float]:
-        return parse_host_severity_vector(await self._query(host_severity_query(window)))
+    async def async_counter_window(self, window: str) -> dict[tuple[str, str, str], float]:
+        return parse_service_severity_vector(await self._query(service_severity_query(window)))

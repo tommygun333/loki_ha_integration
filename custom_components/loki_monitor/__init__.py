@@ -20,7 +20,7 @@ from .api import LokiAuthError, LokiClient, LokiError
 from .alerts import LokiAlertEngine, CONF_ALERT_RULES
 from .const import (
     CONF_QUERY, CONF_URL, CONF_VERIFY_SSL, DOMAIN,
-    CONF_COUNTER_BACKEND, CONF_PROMETHEUS_URL, COUNTER_BACKEND_PROMETHEUS,
+    CONF_PROMETHEUS_URL,
 )
 from .prometheus import PrometheusClient
 from .coordinator import LokiCoordinator
@@ -113,14 +113,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             host_label=entry.options.get("host_label", "host"),
         )
         await engine.async_initialize(rules)
-    prometheus = None
-    if entry.options.get(CONF_COUNTER_BACKEND) == COUNTER_BACKEND_PROMETHEUS:
-        url = entry.options.get(CONF_PROMETHEUS_URL)
-        if not url:
-            raise ConfigEntryNotReady("Prometheus counter backend requires a configured URL")
-        prometheus = PrometheusClient(
-            async_get_clientsession(hass, verify_ssl=entry.data.get(CONF_VERIFY_SSL, True)), url,
+    # Mandatory for every event-count sensor; never fall back to Loki.
+    url = entry.options.get(CONF_PROMETHEUS_URL) or entry.data.get(CONF_PROMETHEUS_URL)
+    if not url:
+        raise ConfigEntryNotReady(
+            "Prometheus URL required; configure it under Loki Monitor options"
         )
+    prometheus = PrometheusClient(
+        async_get_clientsession(hass, verify_ssl=entry.data.get(CONF_VERIFY_SSL, True)), url,
+    )
     coordinator = LokiCoordinator(
         hass, api, dict(entry.options), alerts=engine, prometheus=prometheus,
     )

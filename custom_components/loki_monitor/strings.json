@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Connect to Grafana Loki",
-        "description": "Enter the Loki server base URL (not the Grafana web UI URL). The integration only reads/query logs.",
+        "description": "Connect to Loki for log searches and alerts, and to Prometheus for ALL 1-hour and 24-hour log counters. Both servers must be accessible from Home Assistant.",
         "data": {
           "url": "Loki base URL",
           "auth_type": "Authentication",
@@ -12,7 +12,8 @@
           "password": "Password (Basic auth)",
           "token": "Bearer token",
           "tenant_id": "Loki tenant ID (optional)",
-          "verify_ssl": "Verify HTTPS certificate"
+          "verify_ssl": "Verify HTTPS certificate",
+          "prometheus_url": "Prometheus base URL (required, e.g. http://192.168.1.13:9090)"
         }
       },
       "reauth_confirm": {
@@ -25,7 +26,8 @@
           "password": "Password",
           "token": "Bearer token",
           "tenant_id": "Loki tenant ID",
-          "verify_ssl": "Verify HTTPS certificate"
+          "verify_ssl": "Verify HTTPS certificate",
+          "prometheus_url": "Prometheus base URL (required, e.g. http://192.168.1.13:9090)"
         }
       },
       "reconfigure": {
@@ -37,7 +39,8 @@
           "password": "Password (leave empty to keep existing)",
           "token": "Bearer token (leave empty to keep existing)",
           "tenant_id": "Loki tenant ID",
-          "verify_ssl": "Verify HTTPS certificate"
+          "verify_ssl": "Verify HTTPS certificate",
+          "prometheus_url": "Prometheus base URL (required, e.g. http://192.168.1.13:9090)"
         }
       }
     },
@@ -47,7 +50,8 @@
       "invalid_auth": "Authentication was denied by Loki or its proxy.",
       "invalid_response": "Loki returned an invalid response; check the server base URL.",
       "server_changed": "Reauthentication must use the existing Loki URL. Use Reconfigure to change servers.",
-      "already_configured": "That Loki URL is already configured."
+      "already_configured": "That Loki URL is already configured.",
+      "invalid_prometheus": "Prometheus URL is invalid, unreachable or the Alloy service counters are missing."
     },
     "abort": {
       "already_configured": "That Loki server is already configured.",
@@ -60,7 +64,7 @@
       "init": {
         "title": "Manage Loki Monitor",
         "menu_options": {
-          "settings": "Polling and label mapping",
+          "settings": "Prometheus connection and search settings",
           "remove_query": "Remove LogQL metric sensor",
           "add_metric": "Add LogQL metric sensor",
           "test_metric": "Test LogQL metric query",
@@ -76,17 +80,16 @@
         }
       },
       "settings": {
-        "title": "Polling and label mapping",
-        "description": "Select Loki or optional Prometheus counters for built-in and host-only error/warning counts. Service-specific monitors, alert rules, last-error timestamps and the log viewer remain Loki-backed. The Prometheus mode uses homelab_log_service_events_total with first-sample compensation; the Prometheus server must be reachable from Home Assistant.",
+        "title": "Prometheus connection and Loki search settings",
+        "description": "Prometheus is the only event-count source for fleet, host and service sensors. Loki remains available for raw logs, custom LogQL queries and message-level alerts. Change the Prometheus URL here; no counter-backend switch exists.",
         "data": {
           "poll_seconds": "Polling interval (seconds)",
           "level_label": "Indexed severity label (indexed mode)",
           "host_label": "Host label name",
           "error_levels": "Indexed error values (indexed mode only)",
           "warn_levels": "Indexed warning values (indexed mode only)",
-          "severity_source": "Built-in severity counting mode",
-          "counter_backend": "Count source",
-          "prometheus_url": "Prometheus server URL (optional in Loki mode)"
+          "severity_source": "Loki classification for last-error search (not counts)",
+          "prometheus_url": "Prometheus base URL (required)"
         }
       },
       "remove_query": {
@@ -130,7 +133,7 @@
       },
       "add_monitor": {
         "title": "Add a host/service monitor",
-        "description": "Choose a Loki host. Optionally narrow it to a service_name value. Creates four counters: errors and warnings over 1 and 24 hours. Custom host/service values are allowed.",
+        "description": "Add a host or host/service monitor. Four Prometheus-backed error and warning sensors are created for 1-hour and 24-hour intervals.",
         "data": {
           "monitor_name": "Monitor name",
           "monitor_host": "Host",
@@ -229,7 +232,7 @@
       },
       "add_hosts": {
         "title": "Add multiple watched hosts",
-        "description": "Select any number of Loki-discovered hosts, then save once. Each host creates four error/warning count sensors. Existing host monitors are skipped; no per-host reload.",
+        "description": "Add multiple hosts in one save and one reload. Each selected host receives four Prometheus-backed error/warning sensors.",
         "data": {
           "monitor_hosts": "Hosts to monitor"
         }
