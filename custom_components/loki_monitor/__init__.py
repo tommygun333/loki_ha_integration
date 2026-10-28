@@ -11,14 +11,18 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
 from .api import LokiAuthError, LokiClient, LokiError
 from .alerts import LokiAlertEngine, CONF_ALERT_RULES
-from .const import CONF_QUERY, CONF_URL, CONF_VERIFY_SSL, DOMAIN
+from .const import (
+    CONF_QUERY, CONF_URL, CONF_VERIFY_SSL, DOMAIN,
+    CONF_COUNTER_BACKEND, CONF_PROMETHEUS_URL, COUNTER_BACKEND_PROMETHEUS,
+)
+from .prometheus import PrometheusClient
 from .coordinator import LokiCoordinator
 from .logic import flatten_streams
 from .websocket import async_register_websocket_commands
@@ -109,7 +113,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             host_label=entry.options.get("host_label", "host"),
         )
         await engine.async_initialize(rules)
-    coordinator = LokiCoordinator(hass, api, dict(entry.options), alerts=engine)
+    prometheus = None
+    if entry.options.get(CONF_COUNTER_BACKEND) == COUNTER_BACKEND_PROMETHEUS:
+        url = entry.options.get(CONF_PROMETHEUS_URL)
+        if not url:
+            raise ConfigEntryNotReady("Prometheus counter backend requires a configured URL")
+        prometheus = PrometheusClient(
+            async_get_clientsession(hass, verify_ssl=entry.data.get(CONF_VERIFY_SSL, True)), url,
+        )
+    coordinator = LokiCoordinator(
+        hass, api, dict(entry.options), alerts=engine, prometheus=prometheus,
+    )
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = LokiRuntimeData(api=api, coordinator=coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

@@ -71,19 +71,22 @@
           "add_alert": "Add alert rule",
           "test_alert": "Test alert rule (no events)",
           "select_alert": "Edit alert rule",
-          "remove_alert": "Remove alert rule"
+          "remove_alert": "Remove alert rule",
+          "add_hosts": "Add multiple host monitors"
         }
       },
       "settings": {
         "title": "Polling and label mapping",
-        "description": "Choose detected, indexed, or optional canonical Grafana v1.9 severity classification. Canonical mode handles indexed levels, detected_level and inline log markers, but uses more Loki resources. Current settings are preserved until you change them.",
+        "description": "Select Loki or optional Prometheus counters for built-in and host-only error/warning counts. Service-specific monitors, alert rules, last-error timestamps and the log viewer remain Loki-backed. The Prometheus mode uses homelab_log_service_events_total with first-sample compensation; the Prometheus server must be reachable from Home Assistant.",
         "data": {
           "poll_seconds": "Polling interval (seconds)",
           "level_label": "Indexed severity label (indexed mode)",
           "host_label": "Host label name",
           "error_levels": "Indexed error values (indexed mode only)",
           "warn_levels": "Indexed warning values (indexed mode only)",
-          "severity_source": "Built-in severity counting mode"
+          "severity_source": "Built-in severity counting mode",
+          "counter_backend": "Count source",
+          "prometheus_url": "Prometheus server URL (optional in Loki mode)"
         }
       },
       "remove_query": {
@@ -223,6 +226,13 @@
           "cooldown_minutes": "Cooldown (minutes)",
           "include_message": "Include last matching log line in event (sensitive)"
         }
+      },
+      "add_hosts": {
+        "title": "Add multiple watched hosts",
+        "description": "Select any number of Loki-discovered hosts, then save once. Each host creates four error/warning count sensors. Existing host monitors are skipped; no per-host reload.",
+        "data": {
+          "monitor_hosts": "Hosts to monitor"
+        }
       }
     },
     "error": {
@@ -232,10 +242,12 @@
       "invalid_query": "Loki did not accept the query.",
       "not_numeric": "The query must return a scalar or exactly one vector series. Use sum() to aggregate multiple series.",
       "invalid_monitor": "Enter a valid monitor name, host and optional service. Check the Loki query.",
-      "monitor_limit": "The maximum of 12 monitors has been reached.",
+      "monitor_limit": "The maximum of 64 monitors would be exceeded.",
       "duplicate_monitor": "A monitor with this name or host/service combination already exists.",
       "duplicate_or_limit_alert": "A rule with this name exists, or the maximum of 12 alert rules has been reached.",
-      "invalid_alert": "Invalid rule settings or Loki query. Verify the values, severity, regex and numeric limits."
+      "invalid_alert": "Invalid rule settings or Loki query. Verify the values, severity, regex and numeric limits.",
+      "invalid_prometheus": "Prometheus URL is invalid or the API connection test failed.",
+      "no_hosts": "No hosts found in Loki over 30 days. Add one manually or check the connection."
     }
   }
 }

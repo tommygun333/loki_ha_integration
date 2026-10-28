@@ -184,3 +184,31 @@ async def test_alert_forms_add_edit_preview_remove_preserve_rules(flow):
     flow.config_entry.options = edited["data"]
     removed = await flow.async_step_remove_alert({"rule_id":rule["id"]})
     assert removed["data"]["alert_rules"] == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_hosts_one_commit_preserves_existing(flow):
+    flow.config_entry.options = {
+        "poll_seconds": 300,
+        "monitors": [{"id": "existing-id", "name": "Existing CoreELEC", "host": "CoreELEC", "service": ""}],
+    }
+    form = await flow.async_step_add_hosts()
+    assert form["step_id"] == "add_hosts"
+    result = await flow.async_step_add_hosts({"monitor_hosts": ["pve"]})
+    assert result["type"] == "create_entry"
+    monitors = result["data"]["monitors"]
+    assert len(monitors) == 2
+    assert monitors[0]["id"] == "existing-id"
+    assert monitors[1]["host"] == "pve"
+    assert monitors[1]["service"] == ""
+    assert result["data"]["poll_seconds"] == 300
+
+@pytest.mark.asyncio
+async def test_bulk_hosts_rejects_unknown_and_duplicates(flow):
+    invalid = await flow.async_step_add_hosts({"monitor_hosts": ["not-an-existing-host"]})
+    assert invalid["errors"]["base"] == "invalid_monitor"
+    valid = await flow.async_step_add_hosts({"monitor_hosts": ["CoreELEC", "pve"]})
+    assert len(valid["data"]["monitors"]) == 2
+    flow.config_entry.options = valid["data"]
+    repeat = await flow.async_step_add_hosts({"monitor_hosts": ["pve"]})
+    assert repeat["errors"]["base"] == "invalid_monitor"

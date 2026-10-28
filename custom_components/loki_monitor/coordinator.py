@@ -36,6 +36,7 @@ from .const import (
 )
 from .monitoring import CONF_MONITORS, monitor_selector
 from .alerts import CONF_ALERT_RULES
+from .prometheus import PrometheusClient
 from .viewer import CANONICAL_SEVERITY_TEMPLATE, SEVERITY_PATTERNS
 import json
 from .logic import (
@@ -52,7 +53,7 @@ _LOGGER = logging.getLogger(__name__)
 class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Query summary counts, newest error, labels and user metrics."""
 
-    def __init__(self, hass: HomeAssistant, api: LokiClient, options: dict[str, Any], alerts=None) -> None:
+    def __init__(self, hass: HomeAssistant, api: LokiClient, options: dict[str, Any], alerts=None, prometheus: PrometheusClient | None = None) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -62,6 +63,7 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
         )
         self.api = api
+        self.prometheus = prometheus
         self.alerts = alerts
         self.options = options
         self._failing_queries: set[str] = set()
@@ -164,15 +166,25 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.api.async_query(count_query(selector, window))
 
         work = {
-            "errors_1h": metric_query(error_selector, "errors_1h", "1h"),
-            "errors_24h": metric_query(error_selector, "errors_24h", "24h"),
-            "warnings_1h": metric_query(warn_selector, "warnings_1h", "1h"),
-            "warnings_24h": metric_query(warn_selector, "warnings_24h", "24h"),
             "last_error": self.api.async_recent_logs(error_selector, minutes=1440, limit=1),
             "labels": self.api.async_labels(),
             "hosts": self.api.async_label_values(host_label),
         }
+        if self.prometheus is None:
+            work.update({
+                "errors_1h": metric_query(error_selector, "errors_1h", "1h"),
+                "errors_24h": metric_query(error_selector, "errors_24h", "24h"),
+                "warnings_1h": metric_query(warn_selector, "warnings_1h", "1h"),
+                "warnings_24h": metric_query(warn_selector, "warnings_24h", "24h"),
+            })
+        else:
+            # Two inexpensive PromQL requests replace the four fleet-wide
+            # and four per host-only monitor expensive LogQL count scans.
+            for window in ("1h", "24h"):
+                work[f"prometheus_{window}"] = self.prometheus.async_counter_window(window)
         for monitor in monitors:
+            if self.prometheus is not None and not monitor.get("service"):
+                continue
             for severity in ("error", "warn"):
                 scoped = monitor_selector(
                     monitor,
@@ -235,8 +247,26 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed("Every Loki query failed; check the server connection")
 
         result: dict[str, Any] = {"failed_queries": sorted(failures)}
+        if self.prometheus is not None:
+            for window in ("1h", "24h"):
+                series = values.get(f"prometheus_{window}")
+                names = (f"errors_{window}", f"warnings_{window}")
+                host_monitors = [m for m in monitors if not m.get("service")]
+                monitor_names = [
+                    f"monitor_{m['id']}_{level}_{window}"
+                    for m in host_monitors for level in ("errors", "warnings")
+                ]
+                if not isinstance(series, dict) or f"prometheus_{window}" in failures:
+                    failures.update((*names, *monitor_names))
+                    continue
+                result[names[0]] = sum(v for (host, level), v in series.items() if level == "high")
+                result[names[1]] = sum(v for (host, level), v in series.items() if level == "warning")
+                for monitor in host_monitors:
+                    for level, group in (("errors", "high"), ("warnings", "warning")):
+                        key = f"monitor_{monitor['id']}_{level}_{window}"
+                        result[key] = series.get((monitor["host"], group), 0.0)
         for key in ("errors_1h", "errors_24h", "warnings_1h", "warnings_24h"):
-            if key not in failures:
+            if key not in failures and key not in result:
                 try:
                     result[key] = extract_number(values[key], empty_is_zero=True)
                 except (TypeError, KeyError, ValueError):
@@ -270,7 +300,7 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for severity in ("errors", "warnings"):
                 for window in ("1h", "24h"):
                     key = f"monitor_{monitor['id']}_{severity}_{window}"
-                    if key not in failures:
+                    if key not in failures and key not in result:
                         try:
                             result[key] = extract_number(values[key], empty_is_zero=True)
                         except (TypeError, KeyError, ValueError):

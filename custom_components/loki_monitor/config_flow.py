@@ -21,6 +21,10 @@ from .const import (
     AUTH_TYPES,
     CONF_AUTH_TYPE,
     CONF_CUSTOM_QUERIES,
+    CONF_COUNTER_BACKEND,
+    CONF_PROMETHEUS_URL,
+    COUNTER_BACKEND_LOKI,
+    COUNTER_BACKEND_PROMETHEUS,
     CONF_ERROR_LEVELS,
     CONF_HOST_LABEL,
     CONF_ICON,
@@ -51,6 +55,7 @@ from .const import (
     MIN_POLL_SECONDS,
 )
 from .logic import count_query, extract_number, level_selector, validate_label_name
+from .prometheus import PrometheusClient, PrometheusError, validate_prometheus_url
 from .alerts import (
     CONF_ALERT_RULES, MAX_ALERT_RULES, DEFAULT_RULE, RULE_FIELDS, clean_rule, test_alert_rule,
 )
@@ -224,7 +229,7 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
         return self.async_create_entry(data={**self.config_entry.options, key: items})
 
     async def async_step_init(self, user_input=None) -> ConfigFlowResult:
-        choices = ["settings", "add_metric", "test_metric", "add_monitor", "add_alert", "test_alert"]
+        choices = ["settings", "add_metric", "test_metric", "add_monitor", "add_hosts", "add_alert", "test_alert"]
         if self.config_entry.options.get(CONF_ALERT_RULES):
             choices.extend(["select_alert", "remove_alert"])
         if self.config_entry.options.get(CONF_CUSTOM_QUERIES):
@@ -242,14 +247,31 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
                 validate_label_name(user_input[CONF_HOST_LABEL])
                 level_selector(user_input[CONF_LEVEL_LABEL], user_input[CONF_ERROR_LEVELS])
                 level_selector(user_input[CONF_LEVEL_LABEL], user_input[CONF_WARN_LEVELS])
+                backend = user_input.get(CONF_COUNTER_BACKEND, COUNTER_BACKEND_LOKI)
+                if backend == COUNTER_BACKEND_PROMETHEUS:
+                    url = validate_prometheus_url(user_input.get(CONF_PROMETHEUS_URL, ""))
+                    await PrometheusClient(
+                        async_get_clientsession(
+                            self.hass, verify_ssl=self.config_entry.data.get(CONF_VERIFY_SSL, True)
+                        ), url,
+                    ).async_test_connection()
+                    user_input[CONF_PROMETHEUS_URL] = url
             except ValueError:
-                errors["base"] = "invalid_labels"
+                errors["base"] = "invalid_prometheus" if user_input.get(
+                    CONF_COUNTER_BACKEND
+                ) == COUNTER_BACKEND_PROMETHEUS else "invalid_labels"
+            except PrometheusError:
+                errors["base"] = "invalid_prometheus"
             else:
                 return self.async_create_entry(data={**self.config_entry.options, **user_input})
         opts = self.config_entry.options
         schema = vol.Schema({
             vol.Required(CONF_POLL_SECONDS, default=opts.get(CONF_POLL_SECONDS, DEFAULT_POLL_SECONDS)):
                 vol.All(vol.Coerce(int), vol.Range(min=MIN_POLL_SECONDS, max=MAX_POLL_SECONDS)),
+            vol.Required(CONF_COUNTER_BACKEND, default=opts.get(CONF_COUNTER_BACKEND, COUNTER_BACKEND_LOKI)):
+                vol.In({COUNTER_BACKEND_LOKI: "Loki (existing behavior)",
+                        COUNTER_BACKEND_PROMETHEUS: "Prometheus (host-only counters)"}),
+            vol.Optional(CONF_PROMETHEUS_URL, default=opts.get(CONF_PROMETHEUS_URL, "")): str,
             vol.Required(CONF_SEVERITY_SOURCE, default=opts.get(CONF_SEVERITY_SOURCE, DEFAULT_SEVERITY_SOURCE)):
                 vol.In({
                     SEVERITY_SOURCE_DETECTED: "Grafana Loki detected severity (dashboard-compatible)",
@@ -466,6 +488,68 @@ class LokiOptionsFlow(config_entries.OptionsFlowWithReload):
                     return self._save(CONF_MONITORS, monitors + [{"id": uuid4().hex, **monitor}])
         return self.async_show_form(
             step_id="add_monitor", data_schema=await self._monitor_schema(user_input), errors=errors
+        )
+
+    async def async_step_add_hosts(self, user_input=None) -> ConfigFlowResult:
+        """Add discovered host-only monitors in a single options commit/reload."""
+        current = list(self.config_entry.options.get(CONF_MONITORS, []))
+        monitored = {m["host"] for m in current if not m.get("service")}
+        errors: dict[str, str] = {}
+        try:
+            names = await self._client().async_label_values(
+                self.config_entry.options.get(CONF_HOST_LABEL, DEFAULT_HOST_LABEL), "30d"
+            )
+            available = sorted({h for h in names if isinstance(h, str) and h.strip()
+                                and len(h) <= 128 and h not in monitored})
+        except (LokiError, ValueError):
+            available = []
+
+        if user_input is not None:
+            requested = user_input.get("monitor_hosts", [])
+            if not isinstance(requested, list) or not requested or any(
+                not isinstance(h, str) or h not in available for h in requested
+            ):
+                errors["base"] = "invalid_monitor"
+            else:
+                chosen = sorted(set(requested))
+                if len(current) + len(chosen) > MAX_MONITORS:
+                    errors["base"] = "monitor_limit"
+                else:
+                    taken_names = {m["name"].casefold() for m in current}
+                    new_monitors = []
+                    for host in chosen:
+                        name = host
+                        if name.casefold() in taken_names:
+                            name = f"{host} (host)"
+                        suffix = 2
+                        while name.casefold() in taken_names:
+                            name = f"{host} ({suffix})"
+                            suffix += 1
+                        try:
+                            monitor = clean_monitor(name, host)
+                        except ValueError:
+                            errors["base"] = "invalid_monitor"
+                            break
+                        # No expensive LogQL request per host; values come from
+                        # Loki label discovery and the monitored host is quoted.
+                        taken_names.add(name.casefold())
+                        new_monitors.append({"id": uuid4().hex, **monitor})
+                    if not errors:
+                        return self._save(CONF_MONITORS, current + new_monitors)
+        if not available and user_input is None:
+            errors["base"] = "no_hosts"
+        return self.async_show_form(
+            step_id="add_hosts",
+            data_schema=vol.Schema({
+                vol.Required("monitor_hosts"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=available[:250],
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+            }),
+            errors=errors,
         )
 
     async def async_step_select_monitor(self, user_input=None) -> ConfigFlowResult:

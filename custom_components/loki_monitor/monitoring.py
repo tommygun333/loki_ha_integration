@@ -8,7 +8,7 @@ from .logic import level_selector, validate_label_name
 from .const import SEVERITY_SOURCE_DETECTED, SEVERITY_SOURCE_INDEXED, SEVERITY_SOURCE_CANONICAL
 from .viewer import CANONICAL_SEVERITY_TEMPLATE, SEVERITY_PATTERNS
 
-MAX_MONITORS = 12
+MAX_MONITORS = 64
 CONF_MONITORS = "monitors"
 CONF_MONITOR_ID = "monitor_id"
 CONF_MONITOR_NAME = "monitor_name"
