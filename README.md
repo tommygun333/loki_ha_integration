@@ -259,3 +259,39 @@ Custom exact ranges are limited to **1 minute–7 days** and must end no later
 than the current time (allowing a 60-second clock difference). Timestamp
 validation is also enforced on the Home Assistant backend. Selectors still
 use Alloy's indexed severity; there is no canonical or detected fallback.
+
+## Overview dropdown and additional presets (v0.6.2)
+
+The overview card's controls now remain mounted during Home Assistant's frequent
+`hass` state updates. Only table rows update, and unchanged rows aren't rebuilt.
+This fixes the time-range dropdown disappearing while open and prevents date
+pickers from losing focus. No new backend endpoints or entities are required.
+
+The overview time-range dropdown now offers **15m, 30m, 1h, 3h, 6h, 12h,
+24h, 2d, 3d, 7d and Custom range**. The **1h and 24h** choices use existing
+Home Assistant summary sensor attributes; other presets make **one admin-only,
+on-demand Prometheus query when selected**, with no additional background
+polling. **Refresh counts** re-runs a selected nonstandard preset intentionally.
+The existing Custom range still uses **Load counts**.
+
+The **Open full log explorer** button and individual host View buttons retain
+whichever interval is currently selected. Historical preset windows are anchored
+to their actual loaded timestamp; they won't silently roll forward on every
+Home Assistant state update. Selecting or refreshing a preset chooses a new
+end time. Before historical counts load, summary cells show `—` rather than
+incorrectly reusing the 1h sensor values. Prometheus counter sampling caveats
+from v0.6.1 still apply.
+
+Dashboard YAML is unchanged:
+
+```yaml
+type: custom:loki-monitor-overview-card
+minutes: 60
+```
+
+You can preselect a new preset by setting `minutes: 180`, `minutes: 360` or
+`minutes: 720`. On HACS update/restart, edit (do not duplicate) the overview
+JavaScript module resource to
+`/loki_monitor/loki-monitor-cards.js?v=0.6.2` and refresh your browser.
+The separate viewer JS is unchanged in this release and can keep its existing
+`?v=0.6.1` cache-buster.
