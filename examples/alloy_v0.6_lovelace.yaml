@@ -1,0 +1,35 @@
+# Grafana Alloy indexed severity + Prometheus-backed Loki Monitor v0.6.0.
+# Register BOTH resources in Settings > Dashboards > Resources:
+# /loki_monitor/loki-log-viewer-card.js?v=0.6.0
+# /loki_monitor/loki-monitor-cards.js?v=0.6.0
+# Example snippets below are separate cards; paste each under a view's cards list.
+
+# Full interactive log explorer:
+type: custom:loki-log-viewer-card
+minutes: 60
+page_size: 50
+severity: all
+cascading_filters: true
+hide_ip_hosts: true
+hidden_hosts: []
+label_map:
+  source: source
+  service: service_name
+  program: syslog_identifier
+
+# For a separate, standalone error popup button, use this in a different card:
+# type: custom:loki-log-button-card
+# name: CoreELEC errors
+# host: CoreELEC
+# severity: errors
+# minutes: 60
+
+# Fleet-wide popup button (also a separate card):
+# type: custom:loki-log-button-card
+# name: All host errors
+# severity: errors
+# minutes: 1440
+
+# Optional summary overview (also a separate card):
+# type: custom:loki-monitor-overview-card
+# minutes: 60

@@ -1,49 +1,39 @@
-# Publishing and maintaining the HACS custom repository
+# Publishing and maintaining Grafana Loki Monitor (HACS)
 
-Target GitHub repository: `tommygun333/loki_ha_integration` (public). Keep the repository root layout intact.
+Repository: `https://github.com/tommygun333/loki_ha_integration` (public). The repository already exists; keep the `custom_components/loki_monitor` HACS layout intact. The internal domain remains **`loki_monitor`**.
 
-## Initial publish
+## Before publishing
 
-1. Create a **new public repository** on GitHub named `loki_ha_integration` under `tommygun333`; leave **Initialize with README**, license, and .gitignore **unchecked** because they're already in this source. Enable Issues. Suggested description: `Read-only Grafana Loki monitoring integration for Home Assistant (HACS)` and topics: `home-assistant`, `hacs`, `loki`, `grafana`, `custom-integration`.
-2. Extract the repository source ZIP; in its top-level directory run:
+1. Update integration code, tests and README together. Document changes to the Prometheus counter contract, indexed Alloy `severity`, entity IDs and frontend resources when relevant.
+2. Run `python -m pip install -r requirements-dev.txt` and `python -m pytest -q` from the repository root. Verify the **Validate** GitHub Actions workflow and any HACS/hassfest checks it runs.
+3. If releasing a new integration version, update `custom_components/loki_monitor/manifest.json` and any version-specific examples. Do **not** change the internal domain or overwrite existing HA config entries just to rename the integration.
+4. Keep Home Assistant configuration, `.storage`, real auth tokens, passwords and internal personal data out of Git.
 
-   ```bash
-   git init -b main
-   git add .
-   git commit -m "HACS-ready Grafana Loki Monitor v0.1.3"
-   git remote add origin https://github.com/tommygun333/loki_ha_integration.git
-   git push -u origin main
-   ```
+## Publish a new release
 
-   Authenticate with GitHub on your own computer, e.g. Git Credential Manager or SSH. **Never paste your personal access token in chat or commit it.**
-3. Wait until the **Validate** workflow in GitHub Actions completes. Resolve any reported errors before tagging a release.
-4. Publish the first release:
+From a clean local checkout, after tests have passed and changes are merged to `main`:
 
-   ```bash
-   git tag -a v0.1.3 -m "Loki Monitor v0.1.3"
-   git push origin v0.1.4
-   ```
+```bash
+git switch main
+git pull --ff-only
+# Example only: replace with the version in manifest.json.
+git tag -a v0.6.1 -m "Loki Monitor v0.6.1"
+git push origin v0.6.1
+```
 
-   The `Release` workflow verifies that tag matches `manifest.json`, runs tests/validators, and creates the GitHub Release. Confirm the Releases page shows `v0.1.3`. (If Actions need approval/enablement in the new repo, complete that in GitHub first.)
-5. In HACS: **⋮ → Custom repositories**, paste `https://github.com/tommygun333/loki_ha_integration`, type **Integration**, then Add. Download Grafana Loki Monitor and restart HA. Existing manual installation: do not delete the Loki integration in Devices & services; HACS replaces the same domain folder. Back up `/config` first.
+The version in the annotated tag must match `manifest.json` (`v0.6.1` → `0.6.1`). The release workflow validates the tag and publishes a GitHub Release. Verify its success in GitHub Actions and the Releases page; pushing a tag alone does not guarantee that a Release was created.
 
-## Future update workflow
+Documentation-only changes can be committed without changing `manifest.json` or creating a new release tag. HACS normally picks up the published code version, not each README edit.
 
-1. Edit code, tests, documentation on a branch or on GitHub; open a PR to `main` and check the **Validate** workflow.
-2. Bump `version` in `custom_components/loki_monitor/manifest.json` (e.g. `0.1.4`) and keep documentation/changelog updated.
-3. Merge to `main`, pull locally, then create and push a matching annotated tag:
+## HACS installation/update
 
-   ```bash
-   git switch main
-   git pull --ff-only
-   git tag -a v0.1.4 -m "Loki Monitor v0.1.4"
-   git push origin v0.1.4
-   ```
+In Home Assistant: **HACS → Custom repositories → add this GitHub URL as an Integration**, download/update **Grafana Loki Monitor**, and restart Home Assistant. Existing manual installations use the same `/config/custom_components/loki_monitor` directory and HA config-entry domain.
 
-4. The tag triggers validation and a GitHub Release. HACS discovers the new release version; apply the update in HACS and restart Home Assistant.
+For v0.6.0, the integration requires **both** Loki and Prometheus. Upgrade notes in the README explain that four-per-host counters and old built-in sensor entities were replaced with compact summaries. New frontend resources are:
 
-**Important:** Tags alone are not GitHub Releases. The release workflow must finish successfully for HACS to see a new version when using releases. Avoid changing an existing release tag; publish another version instead.
+```text
+/loki_monitor/loki-log-viewer-card.js?v=0.6.0
+/loki_monitor/loki-monitor-cards.js?v=0.6.0
+```
 
-## Runtime compatibility
-
-Preserve the `loki_monitor` domain and config entry structure. Changing the GitHub repository name or version does not itself migrate Home Assistant config entries. Never commit HA `.storage`, tokens, secrets or Loki credentials to GitHub.
+Update the resource URLs after frontend changes so browser caches refresh. Verify the reusable popup button and native viewer on desktop and mobile before tagging a new feature release.

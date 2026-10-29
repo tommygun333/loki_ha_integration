@@ -131,9 +131,12 @@ async def test_viewer_filters_and_query_one_page(websocket_module):
     assert resp["cursor_ns"]==str(int(resp["end_ns"])-201)
     assert len(resp["logs"])==2
     query,params=apis[0].requests[0]
-    assert '{host="CoreELEC",service_name="kodi"}' in query
-    assert ' | severity=~"(?i)^warning$"' in query
-    assert 'label_format severity=`' not in query and 'severity=~' in query
+    assert query == (
+        '{host="CoreELEC",service_name="kodi",'
+        'severity=~"(?i)^warning$"}'
+    )
+    assert " | label_format " not in query
+    assert " | severity=" not in query
     assert params["limit"]==3
     msg["end_ns"]=resp["end_ns"]
     msg["cursor_ns"]=resp["cursor_ns"]
