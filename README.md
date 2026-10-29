@@ -209,3 +209,53 @@ python -m pytest -q
 
 Check GitHub Actions **Validate** and the Home Assistant/HACS validators before publishing. For a tagged release, keep `custom_components/loki_monitor/manifest.json` version and Git tag aligned. See [PUBLISHING.md](PUBLISHING.md).
 
+## Exact historical ranges (v0.6.1)
+
+The **Loki Log Viewer** and **Homelab Log Overview** now support a manually selected
+start/end range. Times use your **browser's local timezone** and retain seconds.
+For example, in Slovakia, select **Custom dates**, From `28.10.2026 16:00:25`,
+To `28.10.2026 16:50:20` (display formatting depends on the device/locale).
+Select **Search / refresh** to query Loki log lines over precisely that range.
+Pagination stays inside the same historical window, and filter suggestions are
+scoped to its start and end rather than only looking back from the present.
+
+In the **overview card**, choose **Custom range** and click **Load counts**.
+This performs **one on-demand historical Prometheus query** with the same
+counter correction used by Grafana v2.5.3; routine 1h/24h sensor polling remains
+at **two Prometheus queries** per cycle. Historical Prometheus counts are
+scrape-derived estimates, so a very narrow window can miss events; use Loki
+for the original log lines. Only HA administrators can use these on-demand APIs.
+
+The overview now has **Open full log explorer**, which opens all hosts, sources,
+services, programs and severity levels with no log filters. It preserves the
+selected time range. Each existing per-host **View** button opens its host's
+high-severity logs and inherits the same selected range. Neither button adds
+entities or periodic Loki work.
+
+The native explorer card is still:
+
+```yaml
+type: custom:loki-log-viewer-card
+minutes: 60
+page_size: 50
+cascading_filters: true
+```
+
+The overview card is:
+
+```yaml
+type: custom:loki-monitor-overview-card
+minutes: 60
+```
+
+Update **both** Home Assistant frontend resources after upgrading:
+
+```text
+/loki_monitor/loki-log-viewer-card.js?v=0.6.1
+/loki_monitor/loki-monitor-cards.js?v=0.6.1
+```
+
+Custom exact ranges are limited to **1 minute–7 days** and must end no later
+than the current time (allowing a 60-second clock difference). Timestamp
+validation is also enforced on the Home Assistant backend. Selectors still
+use Alloy's indexed severity; there is no canonical or detected fallback.

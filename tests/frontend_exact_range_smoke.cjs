@@ -1,0 +1,13 @@
+const assert=require('assert/strict'), fs=require('fs'),vm=require('vm');
+const src=fs.readFileSync('custom_components/loki_monitor/frontend/loki-monitor-cards.js','utf8');
+const registry=new Map();
+const ctx={HTMLElement:class{},customElements:{get:n=>registry.get(n),define:(n,c)=>registry.set(n,c)},window:{customCards:[],addEventListener:()=>{}},Date,BigInt,console};
+vm.runInNewContext(src,ctx);
+assert.ok(registry.has('loki-log-button-card'));
+assert.ok(registry.has('loki-monitor-overview-card'));
+const range=vm.runInNewContext(`exactRange('2026-10-28T16:00:25','2026-10-28T16:50:20')`,ctx);
+assert.equal((BigInt(range.range_end_ns)-BigInt(range.range_start_ns))/1000000000n,2995n);
+assert.throws(()=>vm.runInNewContext(`exactRange('2026-10-28T16:55:00','2026-10-28T16:00:00')`,ctx));
+assert.ok(src.includes('loki_monitor/range_counts'));
+assert.ok(src.includes('Open full log explorer'));
+console.log('Exact-range frontend smoke passed');

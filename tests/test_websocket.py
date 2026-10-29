@@ -95,7 +95,7 @@ def websocket_module(monkeypatch):
     sys.modules.pop("loki_monitor.websocket",None)
     module=importlib.import_module("loki_monitor.websocket")
     module.async_register_websocket_commands(None)
-    assert len(registry)==3
+    assert len(registry)==4
     yield module
     sys.modules.pop("loki_monitor.websocket",None)
 
@@ -206,3 +206,40 @@ async def test_multiselect_websocket_query_and_contextual_suggestions(websocket_
     assert conn.errors == []
     assert 'host=~"^(?:CoreELEC|pve)$"' in apis[0].requests[0][0]
     assert 'source=~"^(?:journal|docker)$"' in apis[0].requests[0][0]
+
+
+@pytest.mark.asyncio
+async def test_exact_range_pagination_and_prometheus_summary(websocket_module):
+    hass, apis = make_hass()
+    entry = hass.config_entries.async_entries("loki_monitor")[0]
+    entry.options = {"monitors": [{"id":"host-a","name":"CoreELEC","host":"CoreELEC","service":""}]}
+    class PrometheusStub:
+        def __init__(self): self.calls = []
+        async def async_counter_exact_range(self, start_ns, end_ns):
+            self.calls.append((start_ns, end_ns))
+            return {("CoreELEC","kodi","high"): 3.0,
+                    ("CoreELEC","kodi","warning"): 2.0}
+    stub = PrometheusStub()
+    entry.runtime_data.coordinator=SimpleNamespace(prometheus=stub)
+    start="1793199625000000000"
+    end="1793202620000000000"
+    conn=FakeConnection()
+    await websocket_module.websocket_query_logs(hass, conn, {
+      "id":20,"entry_id":"e0","host":"CoreELEC","source":"","service":"","program":"",
+      "severity":"errors","text":"","regex":"","minutes":60,"limit":2,
+      "range_start_ns":start,"range_end_ns":end,
+    })
+    assert conn.errors == []
+    assert apis[0].requests[0][1]["start_ns"] == int(start)
+    assert apis[0].requests[0][1]["end_ns"] == int(end)
+    assert "severity=~" in apis[0].requests[0][0]
+    await websocket_module.websocket_range_counts(hass,conn,{
+      "id":21,"entry_id":"e0","range_start_ns":start,"range_end_ns":end,
+    })
+    assert stub.calls == [(start,end)]
+    assert conn.responses[-1][1]["fleet"]["high"] == 3
+    assert conn.responses[-1][1]["monitors"][0]["warning"] == 2
+    await websocket_module.websocket_range_counts(hass,conn,{
+      "id":22,"entry_id":"e0","range_start_ns":start,"range_end_ns":start,
+    })
+    assert conn.errors[-1][1] == "invalid_range"

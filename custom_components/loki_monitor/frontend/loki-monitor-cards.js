@@ -6,6 +6,23 @@ const ALLOWED_SEVERITIES = new Set(["all", "errors", "warnings", "normal", "emer
 const ALLOWED_MINUTES = new Set([15, 60, 360, 1440, 10080]);
 let lastHass = null;
 let activeDialog = null;
+const MAX_EXACT_MS = 7 * 86400 * 1000;
+function localDateTime(value) {
+  const d = new Date(value);
+  if (!Number.isFinite(d.getTime())) return "";
+  const n = x => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${n(d.getMonth()+1)}-${n(d.getDate())}T${n(d.getHours())}:${n(d.getMinutes())}:${n(d.getSeconds())}`;
+}
+function exactRange(start, end) {
+  const a = new Date(start).getTime(), b = new Date(end).getTime();
+  if (!start || !end || !Number.isFinite(a) || !Number.isFinite(b) ||
+      b-a < 60000 || b-a > MAX_EXACT_MS || b > Date.now()+60000 ||
+      a % 1000 !== 0 || b % 1000 !== 0) {
+    throw new Error("Choose a valid 1-minute to 7-day interval ending no later than now (seconds precision)");
+  }
+  return {range_start_ns:String(BigInt(a)*1000000n),range_end_ns:String(BigInt(b)*1000000n)};
+}
+
 
 function cleanConfig(config = {}) {
   const host = Array.isArray(config.host) ? config.host.filter(x => typeof x === "string" && x.trim()) : (config.host ? [String(config.host)] : []);
@@ -21,6 +38,9 @@ function cleanConfig(config = {}) {
     text: config.text || "",
     regex: config.regex || "",
     label_map: config.label_map || {},
+    ...(config.range_start_ns && config.range_end_ns ? {
+      range_start_ns:String(config.range_start_ns), range_end_ns:String(config.range_end_ns)
+    } : config.start && config.end ? exactRange(config.start, config.end) : {}),
   };
 }
 
@@ -98,8 +118,11 @@ class LokiMonitorOverviewCard extends HTMLElement {
       (!this.config.entry_id || s.attributes.loki_entry_id === this.config.entry_id));
     entries.sort((a,b) => (a.attributes.monitor_type === "fleet" ? -1 : b.attributes.monitor_type === "fleet" ? 1 :
       (a.attributes.host || "").localeCompare(b.attributes.host || "")));
-    const w = Number(this._minutes ?? this.config.minutes) === 1440 ? "24h" : "1h";
+    const selectedWindow = String(this._minutes ?? this.config.minutes ?? 60);
+    const custom = selectedWindow === "custom";
+    const w = selectedWindow === "1440" ? "24h" : "1h";
     const minutes = w === "24h" ? 1440 : 60;
+    const exactData = custom ? this._exactData : null;
     this.shadowRoot.innerHTML = `<style>
       :host{display:block}ha-card{padding:14px}h3{margin:0 0 12px;font-size:16px}
       table{width:100%;border-collapse:collapse}th,td{padding:9px 5px;text-align:left;border-bottom:1px solid var(--divider-color)}
@@ -107,10 +130,33 @@ class LokiMonitorOverviewCard extends HTMLElement {
       th{font-size:12px;color:var(--secondary-text-color)}td.numeric{text-align:right;font-variant-numeric:tabular-nums}
       button{cursor:pointer;border:1px solid var(--divider-color);border-radius:7px;background:transparent;
       color:var(--primary-text-color);padding:6px 9px}button:focus-visible{outline:2px solid var(--primary-color)}
-      </style><ha-card><h3>Homelab Logs <select id="window" aria-label="Count period"><option value="60">1 hour</option><option value="1440">24 hours</option></select></h3><table><thead><tr><th>Host / service</th><th>High</th><th>Warnings</th><th>Logs</th></tr></thead><tbody></tbody></table></ha-card>`;
+      </style><ha-card>
+      <h3>Homelab Logs <select id="window" aria-label="Count period"><option value="60">1 hour</option><option value="1440">24 hours</option><option value="custom">Custom range</option></select></h3>
+      <div id="exact-controls" ${custom ? '' : 'hidden'} style="margin:10px 0;display:${custom ? 'flex':'none'};flex-wrap:wrap;gap:8px;align-items:end">
+        <label>From (local)<input id="exact-from" type="datetime-local" step="1" style="display:block"></label>
+        <label>To (local)<input id="exact-to" type="datetime-local" step="1" style="display:block"></label>
+        <button id="apply-exact" type="button">Load counts</button>
+        <span id="exact-message" role="status"></span>
+      </div>
+      <div style="margin-bottom:10px"><button id="full-explorer" type="button">Open full log explorer</button></div>
+      <table><thead><tr><th>Host / service</th><th>High</th><th>Warnings</th><th>Logs</th></tr></thead><tbody></tbody></table></ha-card>`;
     const windowSelect = this.shadowRoot.querySelector("#window");
-    windowSelect.value = String(minutes);
-    windowSelect.addEventListener("change", () => { this._minutes=Number(windowSelect.value); this._render(); });
+    windowSelect.value = selectedWindow;
+    windowSelect.addEventListener("change", () => { this._minutes=windowSelect.value; this._render(); });
+    const fromInput = this.shadowRoot.querySelector('#exact-from');
+    const toInput = this.shadowRoot.querySelector('#exact-to');
+    fromInput.value = this._rangeFrom || localDateTime(Date.now()-3600000);
+    toInput.value = this._rangeTo || localDateTime(Date.now());
+    fromInput.addEventListener('change', () => {this._rangeFrom=fromInput.value;this._exactData=null;this._appliedExact=null;this._exactRequestId=(this._exactRequestId||0)+1;this._render();});
+    toInput.addEventListener('change', () => {this._rangeTo=toInput.value;this._exactData=null;this._appliedExact=null;this._exactRequestId=(this._exactRequestId||0)+1;this._render();});
+    this.shadowRoot.querySelector('#apply-exact').addEventListener('click', () => this._fetchExact(fromInput.value,toInput.value));
+    this.shadowRoot.querySelector('#full-explorer').addEventListener('click', () => {
+      let params = {};
+      try { if (custom) params=exactRange(fromInput.value,toInput.value); }
+      catch (e) { this._setRangeMessage(e.message);return; }
+      openLogPopup(this._hass, {entry_id:this.config.entry_id || '',severity:'all',minutes,...params})
+        .catch(e=>this._setRangeMessage(e.message));
+    });
     const tbody = this.shadowRoot.querySelector("tbody");
     for (const state of entries) {
       const tr = document.createElement("tr");
@@ -118,21 +164,53 @@ class LokiMonitorOverviewCard extends HTMLElement {
       name.textContent = state.attributes.monitor_type === "fleet" ? "All hosts" :
         (state.attributes.host + (state.attributes.service_name ? " / " + state.attributes.service_name : ""));
       const high = document.createElement("td"); high.className="numeric";
-      high.textContent = state.attributes[`high_${w}`] ?? "—";
+      const scoped = state.attributes.monitor_type === 'fleet' ? exactData?.fleet :
+        exactData?.monitors?.find(x => x.host === state.attributes.host &&
+          (x.service_name || '') === (state.attributes.service_name || ''));
+      high.textContent = custom ? (scoped?.high ?? '—') : (state.attributes[`high_${w}`] ?? '—');
       const warning = document.createElement("td"); warning.className="numeric";
-      warning.textContent = state.attributes[`warning_${w}`] ?? "—";
+      warning.textContent = custom ? (scoped?.warning ?? '—') : (state.attributes[`warning_${w}`] ?? '—');
       const cell = document.createElement("td");
       const button = document.createElement("button"); button.textContent="View"; button.type="button";
       button.setAttribute("aria-label", `View errors for ${name.textContent}`);
-      button.addEventListener("click", () => openLogPopup(this._hass, {
-        entry_id:state.attributes.loki_entry_id, host:state.attributes.host || "",
-        service:state.attributes.service_name || "", severity:"errors", minutes,
-      }).catch(err => console.error("Loki Monitor popup:", err.message)));
+      button.addEventListener("click", () => {
+        let params={};
+        try { if (custom) params=exactRange(fromInput.value,toInput.value); }
+        catch (e) { this._setRangeMessage(e.message);return; }
+        openLogPopup(this._hass, {
+          entry_id:state.attributes.loki_entry_id, host:state.attributes.host || "",
+          service:state.attributes.service_name || "", severity:"errors", minutes,...params,
+        }).catch(err => this._setRangeMessage(err.message));
+      });
       cell.append(button); tr.append(name,high,warning,cell); tbody.append(tr);
     }
     if (!entries.length) {
       const row = document.createElement("tr"); const cell = document.createElement("td");
       cell.colSpan = 4; cell.textContent = "No Log Summary sensors found"; row.append(cell); tbody.append(row);
+    }
+  }
+  _setRangeMessage(message) {
+    const node = this.shadowRoot?.querySelector('#exact-message');
+    if (node) node.textContent = message;
+  }
+  async _fetchExact(start, end) {
+    let params;
+    try { params = exactRange(start, end); }
+    catch (e) { this._setRangeMessage(e.message); return; }
+    this._rangeFrom=start;this._rangeTo=end;
+    this._setRangeMessage('Loading Prometheus counts…');
+    const req = this._exactRequestId = (this._exactRequestId || 0) + 1;
+    try {
+      const response=await this._hass.connection.sendMessagePromise({
+        type:'loki_monitor/range_counts',entry_id:this.config.entry_id || '',...params,
+      });
+      if (req !== this._exactRequestId) return;
+      this._exactData=response;
+      this._appliedExact=params;
+      this._render();
+      this._setRangeMessage('Exact-range counts loaded');
+    } catch(e) {
+      if(req === this._exactRequestId) this._setRangeMessage(e.message || 'Prometheus query failed');
     }
   }
 }

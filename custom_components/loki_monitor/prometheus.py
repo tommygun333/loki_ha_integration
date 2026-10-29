@@ -14,6 +14,8 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
+from .time_range import validate_exact_range
+
 METRIC = "homelab_log_service_events_total"
 COUNTER_JOB = "homelab-alloy-logs"
 COUNTER_LEVELS = ("high", "warning", "normal", "unknown")
@@ -103,11 +105,14 @@ class PrometheusClient:
         self._session = session
         self._url = validate_prometheus_url(base_url)
 
-    async def _query(self, query: str) -> Any:
+    async def _query(self, query: str, *, at_seconds: int | None = None) -> Any:
+        params = {"query": query}
+        if at_seconds is not None:
+            params["time"] = str(at_seconds)
         try:
             async with self._session.get(
                 f"{self._url}/api/v1/query",
-                params={"query": query},
+                params=params,
                 timeout=ClientTimeout(total=25),
                 allow_redirects=False,
             ) as response:
@@ -139,3 +144,26 @@ class PrometheusClient:
 
     async def async_counter_window(self, window: str) -> dict[tuple[str, str, str], float]:
         return parse_service_severity_vector(await self._query(service_severity_query(window)))
+
+    async def async_counter_exact_range(
+        self, start_ns: str, end_ns: str
+    ) -> dict[tuple[str, str, str], float]:
+        """On-demand historical counts, evaluated at the exact selected end.
+
+        One grouped PromQL instant query. No background polling or per-host calls.
+        The same first-observed-sample correction as Grafana v2.5.3 is used.
+        """
+        start, end = validate_exact_range(start_ns, end_ns)
+        seconds = (end - start) // 1_000_000_000
+        base = f'{METRIC}{{job="{COUNTER_JOB}"}}'
+        window = f'{seconds}s'
+        minimum = f'min_over_time({base}[{window}])'
+        delta = f'increase({base}[{window}])'
+        corrected = (
+            f'(({delta} or (0 * {minimum})) + '
+            f'(({minimum} unless {base} offset {window}) or (0 * {minimum})))'
+        )
+        query = f'sum by (host, service_name, severity_group) ({corrected})'
+        return parse_service_severity_vector(
+            await self._query(query, at_seconds=end // 1_000_000_000)
+        )

@@ -168,10 +168,13 @@ class LokiClient:
         return [value for value in result if isinstance(value, str)]
 
     async def async_label_values(
-        self, label: str, since: str = "1h", *, query: str | None = None
+        self, label: str, since: str = "1h", *, query: str | None = None,
+        start_ns: int | None = None, end_ns: int | None = None,
     ) -> list[str]:
         validate_label_name(label)
-        params = {"since": since}
+        params = {"start": str(start_ns), "end": str(end_ns)} if (
+            start_ns is not None and end_ns is not None
+        ) else {"since": since}
         if query is not None:
             params["query"] = query
         result = await self._get(

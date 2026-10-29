@@ -16,25 +16,10 @@ from .const import CONF_CUSTOM_QUERIES, CONF_POLL_SECONDS, DEFAULT_POLL_SECONDS,
 from .logic import extract_number
 from .monitoring import CONF_MONITORS
 from .prometheus import PrometheusClient, PrometheusError
+from .summary_counts import summarize, SEVERITY_GROUPS
 
 _LOGGER = logging.getLogger(__name__)
-SEVERITY_GROUPS = ('high', 'warning', 'normal', 'unknown')
 WINDOWS = ('1h', '24h')
-
-
-def summarize(series: dict[tuple[str, str, str], float], *, host: str = '', service: str = '') -> dict[str, int]:
-    """All dimensions of a host/service summary from one grouped Prometheus vector.
-
-    Missing series in an otherwise successful Prometheus response count as zero.
-    Do not call this if the Prometheus request failed.
-    """
-    result: dict[str, int] = {}
-    for level in SEVERITY_GROUPS:
-        total = sum(v for (h, s, group), v in series.items()
-                    if group == level and (not host or h == host) and (not service or s == service))
-        result[level] = max(0, round(total))
-    result['total'] = sum(result.values())
-    return result
 
 
 class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):

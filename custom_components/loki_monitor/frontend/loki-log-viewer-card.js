@@ -8,6 +8,9 @@ class LokiLogViewerCard extends HTMLElement {
       throw new Error("Expected type: custom:loki-log-viewer-card");
     }
     this._config = { ...config };
+    this._initialExact = config.range_start_ns && config.range_end_ns ? {
+      range_start_ns:String(config.range_start_ns), range_end_ns:String(config.range_end_ns)
+    } : null;
     const labels = config.label_map || {};
     this._labelMap = {
       source_label: String(labels.source || "source"),
@@ -61,9 +64,12 @@ class LokiLogViewerCard extends HTMLElement {
       severity: String(c.severity || "all"), severity_mode: "indexed",
       text: String(c.text || ""),
       regex: String(c.regex || ""),
-      minutes: [15, 60, 360, 1440, 10080].includes(Number(c.minutes)) ? Number(c.minutes) : 60,
+      minutes: this._initialExact ? 'custom' : ([15, 60, 360, 1440, 10080].includes(Number(c.minutes)) ? Number(c.minutes) : 60),
       limit: [25, 50, 100].includes(Number(c.page_size)) ? Number(c.page_size) : 50,
     };
+    this._initialExact = c.range_start_ns && c.range_end_ns ? {
+      range_start_ns:String(c.range_start_ns), range_end_ns:String(c.range_end_ns)
+    } : null;
     this._activeEntryId = String(c.entry_id || "");
     this._rows = [];
     this._cursor = null;
@@ -137,7 +143,7 @@ class LokiLogViewerCard extends HTMLElement {
         <div class="head"><div><h2>Loki Log Viewer</h2><span class="sub">Read-only · Alloy indexed severity · administrators</span></div><a id="grafana" hidden target="_blank" rel="noopener noreferrer">Grafana Explore ↗</a></div>
         <section class="filters">
           <label>Server<select id="entry"></select></label>
-          <label>Time range<select id="minutes"><option value="15">15 minutes</option><option value="60">1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option><option value="10080">7 days</option></select></label>
+          <label>Time range<select id="minutes"><option value="15">15 minutes</option><option value="60">1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option><option value="10080">7 days</option><option value="custom">Custom dates</option></select></label>
           <label>Host<button type="button" class="multi-trigger" id="host" aria-haspopup="dialog"><span class="selected">All hosts</span><span class="chevron" aria-hidden="true">▾</span></button></label>
           <label>Source<button type="button" class="multi-trigger" id="source" aria-haspopup="dialog"><span class="selected">All sources</span><span class="chevron" aria-hidden="true">▾</span></button></label>
           <label>Service<button type="button" class="multi-trigger" id="service" aria-haspopup="dialog"><span class="selected">All services</span><span class="chevron" aria-hidden="true">▾</span></button></label>
@@ -148,6 +154,11 @@ class LokiLogViewerCard extends HTMLElement {
           <label>Text contains<input id="text" maxlength="256" placeholder="Plain text"></label>
           <label>Regex<input id="regex" maxlength="256" placeholder="Optional LogQL regex"></label>
         </section>
+        <div id="exact-controls" style="display:none;flex-wrap:wrap;gap:10px;margin:12px 0;align-items:end">
+          <label>From (browser local time)<input id="exact-from" type="datetime-local" step="1"></label>
+          <label>To (browser local time)<input id="exact-to" type="datetime-local" step="1"></label>
+          <span class="sub">Selected window: 1 minute–7 days, seconds precision</span>
+        </div>
         <div class="actions"><button class="primary" id="apply">Search / refresh</button><span id="status" role="status" aria-live="polite"></span></div>
         <section class="loglist" id="loglist" aria-label="Loki log entries"></section>
         <div class="foot"><button id="older" hidden>Load older logs</button></div>
@@ -185,7 +196,21 @@ class LokiLogViewerCard extends HTMLElement {
     this.shadowRoot.getElementById("filter-picker").addEventListener("click", e => {
       if (e.target === e.currentTarget) e.currentTarget.close();
     });
-    this.shadowRoot.getElementById("minutes").addEventListener("change", () => this._loadSuggestions());
+    const from = this.shadowRoot.getElementById("exact-from");
+    const to = this.shadowRoot.getElementById("exact-to");
+    const localDateTime = ms => {
+      const d=new Date(ms), n=x=>String(x).padStart(2,"0");
+      return `${d.getFullYear()}-${n(d.getMonth()+1)}-${n(d.getDate())}T${n(d.getHours())}:${n(d.getMinutes())}:${n(d.getSeconds())}`;
+    };
+    const toLocal = ns => localDateTime(Number(BigInt(ns)/1000000n));
+    from.value=this._initialExact ? toLocal(this._initialExact.range_start_ns) : localDateTime(Date.now()-3600000);
+    to.value=this._initialExact ? toLocal(this._initialExact.range_end_ns) : localDateTime(Date.now());
+    if(this._initialExact) this.shadowRoot.getElementById("minutes").value="custom";
+    this._toggleExactControls();
+    this.shadowRoot.getElementById("minutes").addEventListener("change", () => {
+      this._toggleExactControls();this._loadSuggestions();
+    });
+    for(const input of [from,to]) input.addEventListener('change',()=>this._loadSuggestions());
     this.shadowRoot.getElementById("entry").addEventListener("change", async () => {
       this._activeEntryId = this.shadowRoot.getElementById("entry").value;
       await this._loadSuggestions();
@@ -207,6 +232,23 @@ class LokiLogViewerCard extends HTMLElement {
         if (e.key === "Enter") this._query(false);
       });
     }
+  }
+
+  _toggleExactControls() {
+    const custom=this.shadowRoot.getElementById('minutes').value==='custom';
+    this.shadowRoot.getElementById('exact-controls').style.display=custom?'flex':'none';
+  }
+
+  _exactBounds() {
+    const start=this.shadowRoot.getElementById('exact-from').value;
+    const end=this.shadowRoot.getElementById('exact-to').value;
+    const a=new Date(start).getTime(), b=new Date(end).getTime();
+    if(!start || !end || !Number.isFinite(a) || !Number.isFinite(b) ||
+       b-a<60000 || b-a>7*86400000 || b>Date.now()+60000 ||
+       a%1000!==0 || b%1000!==0) {
+      throw new Error('Choose a valid time range (1 minute to 7 days, ending no later than now)');
+    }
+    return {range_start_ns:String(BigInt(a)*1000000n),range_end_ns:String(BigInt(b)*1000000n)};
   }
 
   _populateControls() {
@@ -368,13 +410,17 @@ class LokiLogViewerCard extends HTMLElement {
     if (!this._hass || !this._activeEntryId) return;
     const id = this._activeEntryId;
     const revision = ++this._suggestionRevision;
-    const filters = this._readFilters();
+    let filters;
+    try { filters=this._readFilters(); } catch { return; }
     try {
       const response = await this._hass.connection.sendMessagePromise({
         type: "loki_monitor/filters", entry_id: id,
         host: filters.host, source: filters.source,
         service: filters.service, program: filters.program,
         minutes: filters.minutes, cascading: this._cascadingFilters,
+        ...(filters.range_start_ns ? {
+          range_start_ns:filters.range_start_ns,range_end_ns:filters.range_end_ns
+        } : {}),
         ...this._labelMap,
       });
       if (id !== this._activeEntryId || revision !== this._suggestionRevision) return;
@@ -400,6 +446,10 @@ class LokiLogViewerCard extends HTMLElement {
     for (const key of ["severity", "text", "regex", "minutes", "limit"]) {
       values[key] = this.shadowRoot.getElementById(key).value;
     }
+    if (values.minutes === 'custom') {
+      Object.assign(values, this._exactBounds());
+      values.minutes = 60; // Ignored by the server for explicit bounds.
+    }
     values.minutes = Number(values.minutes);
     values.limit = Number(values.limit);
     return values;
@@ -409,7 +459,9 @@ class LokiLogViewerCard extends HTMLElement {
     if (!this._hass || !this._activeEntryId) return;
     if (older && !this._cursor) return;
     const rev = ++this._revision;
-    const filters = older ? this._appliedFilters : this._readFilters();
+    let filters;
+    try { filters = older ? this._appliedFilters : this._readFilters(); }
+    catch (err) { this._status(err.message, true); return; }
     if (!older) {
       this._rows = [];
       this._cursor = null;
