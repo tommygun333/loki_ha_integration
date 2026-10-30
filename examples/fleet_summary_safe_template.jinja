@@ -1,0 +1,13 @@
+{# Copy into the existing fleet-summary dashboard template. #}
+{% set fleet = 'sensor.server_grafana_loki_fleet_log_summary' %}
+{% set entry = state_attr(fleet, 'loki_entry_id') %}
+{% set hosts = (
+    states.sensor
+    | selectattr('attributes.monitor_type', 'defined')
+    | selectattr('attributes.monitor_type', 'eq', 'host')
+    | selectattr('attributes.loki_entry_id', 'defined')
+    | selectattr('attributes.loki_entry_id', 'eq', entry)
+    | list | count
+  ) if entry else 0 %}
+{{ hosts }} hosts monitored • {{ '{:,}'.format(state_attr(fleet, 'total_1h') | int(0)) }} logs (1h)
+Query failures {{ states('sensor.grafana_loki_query_failures') | int(0) }} • Alert-rule failures {{ states('sensor.grafana_loki_alert_rule_failures') | int(0) }}

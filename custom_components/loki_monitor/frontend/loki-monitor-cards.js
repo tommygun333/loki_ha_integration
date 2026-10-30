@@ -157,7 +157,12 @@ class LokiMonitorOverviewCard extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>
       :host{display:block}ha-card{padding:14px}h3{margin:0;font-size:16px}
       .toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
-      table{width:100%;border-collapse:collapse}th,td{padding:9px 5px;text-align:left;border-bottom:1px solid var(--divider-color)}
+      table{width:100%;border-collapse:collapse;table-layout:fixed}
+      th,td{padding:9px 5px;text-align:left;border-bottom:1px solid var(--divider-color)}
+      th:first-child,td:first-child{overflow-wrap:anywhere}
+      th:nth-child(2),td:nth-child(2){width:3.8rem;text-align:right}
+      th:nth-child(3),td:nth-child(3){width:5.25rem;text-align:right}
+      th:nth-child(4),td:nth-child(4){width:4.7rem;text-align:center}
       select{min-height:36px;background:var(--card-background-color);color:var(--primary-text-color);border:1px solid var(--divider-color);border-radius:7px;padding:4px}
       th{font-size:12px;color:var(--secondary-text-color)}td.numeric{text-align:right;font-variant-numeric:tabular-nums}
       button{cursor:pointer;border:1px solid var(--divider-color);border-radius:7px;background:transparent;
