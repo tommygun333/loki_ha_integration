@@ -47,14 +47,18 @@ class FakePrometheus:
             ('OPNsense.internal','opnsense-system','high'): 3,
             ('CoreELEC','kodi','normal'): 20,
         }
-        self.failing=set(failing);self.windows=[]
+        self.failing=set(failing);self.windows=[];self.health_queries=0
     async def async_counter_window(self,window):
         self.windows.append(window)
         if window in self.failing: raise RuntimeError('Offline')
         return self.data
+    async def async_alloy_scrapes(self):
+        self.health_queries += 1
+        if 'alloy_scrapes' in self.failing: raise RuntimeError('Offline')
+        return {'CoreELEC': {'up': False, 'targets': [{'instance': '192.168.1.17:12345', 'up': False}]}}
 
 @pytest.mark.asyncio
-async def test_fleet_host_service_summary_uses_only_two_prometheus_queries(coordinator_class):
+async def test_fleet_host_service_summary_uses_two_counts_and_one_health_query(coordinator_class):
     prom=FakePrometheus()
     options={'monitors':[
         {'id':'a','host':'CoreELEC','name':'Kodi box','service':''},
@@ -62,6 +66,8 @@ async def test_fleet_host_service_summary_uses_only_two_prometheus_queries(coord
         {'id':'c','host':'missing','name':'Missing','service':''}]}
     result=await coordinator_class(None, NoLokiCalls(),options,prometheus=prom)._async_update_data()
     assert sorted(prom.windows)==['1h','24h']
+    assert prom.health_queries == 1
+    assert result['alloy_scrapes']['CoreELEC']['up'] is False
     assert result['fleet_summary']['high_1h']==5
     assert result['fleet_summary']['high_24h']==5
     assert result['fleet_summary']['normal_1h']==20
@@ -88,3 +94,14 @@ async def test_custom_query_is_disabled_by_default(coordinator_class):
     coord=coordinator_class(None,NoLokiCalls(),{'custom_queries':[{'id':'test','query':'expensive'}]},prometheus=FakePrometheus())
     result=await coord._async_update_data()
     assert result['custom_test'] is None
+
+
+@pytest.mark.asyncio
+async def test_failed_health_check_does_not_turn_agent_off_or_break_counts(coordinator_class):
+    result = await coordinator_class(
+        None, NoLokiCalls(), {}, prometheus=FakePrometheus(failing=['alloy_scrapes'])
+    )._async_update_data()
+    assert result['alloy_scrapes'] is None
+    assert result['prometheus_available'] is True
+    assert result['fleet_summary']['high_1h'] == 5
+    assert result['failed_queries'] == ['alloy_scrapes']

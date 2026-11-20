@@ -1,6 +1,7 @@
 """Prometheus-only event counter backend for Alloy's per-service counters.
 
 Two grouped instant queries (1h/24h) feed every fleet, host and service count.
+An additional instant ``up`` query supplies scrape health for Alloy collectors.
 Log searches and message-based alerts intentionally remain in Loki.
 """
 
@@ -98,6 +99,52 @@ def parse_service_severity_vector(data: Any) -> dict[tuple[str, str, str], float
     return result
 
 
+def alloy_scrape_query() -> str:
+    """The same target-health expression as Grafana's Alloy scrape table."""
+    return f'up{{job="{COUNTER_JOB}"}}'
+
+
+def parse_alloy_scrape_vector(data: Any) -> dict[str, dict[str, Any]]:
+    """Group scrape targets by collector, keeping failed scrapes (up=0).
+
+    A missing target must never be interpreted as down: only an explicit
+    Prometheus up=0 sample reports a failed scrape. A collector with multiple
+    targets is considered healthy only when *all* its targets are up.
+    """
+    if not isinstance(data, dict) or data.get("status") != "success":
+        raise PrometheusError("Prometheus scrape-health query was unsuccessful")
+    block = data.get("data")
+    if not isinstance(block, dict) or block.get("resultType") != "vector":
+        raise PrometheusError("Prometheus did not return a scrape-health vector")
+    vector = block.get("result")
+    if not isinstance(vector, list):
+        raise PrometheusError("Invalid Prometheus scrape-health vector")
+
+    collectors: dict[str, dict[str, Any]] = {}
+    for series in vector:
+        if not isinstance(series, dict) or not isinstance(series.get("metric"), dict):
+            raise PrometheusError("Invalid Prometheus scrape-health series")
+        labels = series["metric"]
+        instance = labels.get("instance")
+        collector = labels.get("collector_node") or instance
+        sample = series.get("value")
+        if (not isinstance(instance, str) or not instance
+                or not isinstance(collector, str) or not collector
+                or not isinstance(sample, list) or len(sample) != 2):
+            raise PrometheusError("Invalid Prometheus scrape-health labels or sample")
+        try:
+            value = float(sample[1])
+        except (TypeError, ValueError) as err:
+            raise PrometheusError("Invalid Prometheus scrape-health value") from err
+        if not math.isfinite(value) or value not in (0.0, 1.0):
+            raise PrometheusError("Expected Prometheus up sample to be 0 or 1")
+        target_up = value == 1.0
+        status = collectors.setdefault(collector, {"up": True, "targets": []})
+        status["up"] = status["up"] and target_up
+        status["targets"].append({"instance": instance, "up": target_up})
+    return collectors
+
+
 class PrometheusClient:
     """Small unauthenticated Prometheus HTTP API client for a trusted LAN."""
 
@@ -141,6 +188,10 @@ class PrometheusClient:
             found = False
         if not found:
             raise PrometheusError("Expected Alloy service counters were not found")
+
+    async def async_alloy_scrapes(self) -> dict[str, dict[str, Any]]:
+        """Read all registered Alloy scrape targets in a single instant query."""
+        return parse_alloy_scrape_vector(await self._query(alloy_scrape_query()))
 
     async def async_counter_window(self, window: str) -> dict[tuple[str, str, str], float]:
         return parse_service_severity_vector(await self._query(service_severity_query(window)))

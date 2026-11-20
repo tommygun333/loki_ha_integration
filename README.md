@@ -11,13 +11,15 @@ A read-only Home Assistant integration for an Alloy-based logging stack. **Prome
 | Component | Purpose | Automatic workload |
 | --- | --- | --- |
 | Grafana Alloy | Collects logs, normalizes `severity`, emits counters | Runs on collectors outside this integration |
-| Prometheus | 1h/24h counts per fleet, host, and service | **Two grouped instant queries** per integration poll |
+| Prometheus | 1h/24h counts per fleet, host, and service | **Two grouped count queries + one Alloy scrape-health query** per poll |
 | Loki | Full log lines, filter suggestions, manually requested searches | No scheduled log queries unless custom query polling or alert rules are enabled |
 | Home Assistant | Compact summary sensors, explorer and popup cards | Default poll interval **120 seconds** (configurable 60–3600 seconds) |
 
 The metric used is `homelab_log_service_events_total{job="homelab-alloy-logs", host, service_name, severity_group}`. The four `severity_group` values are `high`, `warning`, `normal`, and `unknown`. The high group covers `emergency`, `alert`, `critical`, `fatal`, and `error`. Normal covers `notice`, `info`, `debug`, and `trace`.
 
-The integration issues one PromQL query for `1h` and one for `24h`, grouped by `host`, `service_name`, and `severity_group`; it computes the fleet/host/service summaries from those two responses. Its counter expression uses `increase()`, `min_over_time()` and a first-observed-sample correction compatible with the current Grafana dashboard v2.5.3. **Counts are estimates** across counter resets, gaps, sparse series, or startup. Prometheus ingestion counters can disagree with Loki when Loki deduplicates identical timestamp/stream/line entries. The two systems are not interchangeable event stores.
+The integration issues one PromQL count query for `1h` and one for `24h`, grouped by `host`, `service_name`, and `severity_group`; it computes the fleet/host/service summaries from those two responses. Its counter expression uses `increase()`, `min_over_time()` and a first-observed-sample correction compatible with the current Grafana dashboard v2.5.3. **Counts are estimates** across counter resets, gaps, sparse series, or startup. Prometheus ingestion counters can disagree with Loki when Loki deduplicates identical timestamp/stream/line entries. The two systems are not interchangeable event stores.
+
+Collector health comes from the same PromQL expression used by the Grafana v2.5.3 scrape-target table: `up{job="homelab-alloy-logs"}`. It adds one instant query per integration poll, not one request per host. The check reports whether Prometheus can scrape the registered Alloy `/metrics` endpoint; it does **not** prove that Loki is receiving or storing logs.
 
 ## Installation
 
@@ -37,11 +39,12 @@ For an existing manual installation, the `loki_monitor` domain stays the same. H
 - Primary sensor state: **high-severity count over the past 1 hour**.
 - Sensor attributes: `high_1h`, `high_24h`, `warning_1h`, `warning_24h`, `normal_1h`, `normal_24h`, `unknown_1h`, `unknown_24h`, `total_1h`, `total_24h`, plus `monitor_type`, `host`, `service_name`, `loki_entry_id`, `count_source`.
 - Diagnostics: **Query failures**, **Alert rule failures**, and **Counter backend available** binary sensor.
+- One **Alloy scrape healthy** binary sensor per registered Prometheus `collector_node`. `on` = all of that collector's scrape targets returned `up=1`, `off` = at least one returned `up=0`, and `unavailable` = target missing, failed health query, or unavailable coordinator. Attributes include the collector label, scrape job, and target instances. New collectors are discovered on later polls without reloading the integration.
 - Custom numeric LogQL sensors remain available only if **Poll custom user-authored LogQL sensors** is enabled; it is **off by default**.
 
 The `high_1h` state is convenient for normal Home Assistant cards and automations. For example, read the other windows through a template: `{{ state_attr('sensor.your_host_log_summary', 'high_24h') }}`. Entity IDs depend on the names chosen and the HA entity registry; inspect Developer Tools → States to find the actual ID.
 
-A successful Prometheus query with no samples for an individual host is treated as zero for that host. If a whole required query fails, values from that window are not reported as zero. A host's counts do **not** establish collector health or host reachability.
+A successful Prometheus query with no samples for an individual host is treated as zero for that host. If a whole required query fails, values from that window are not reported as zero. A host's counts do **not** establish collector health or host reachability. Collector labels are not necessarily Loki log `host` labels: for instance, OPNsense and OpenWrt logs may be collected by a central Alloy instance and do not have their own scrape targets. Health sensors follow the real registered Alloy collectors, not the host/service log monitors.
 
 ### Add hosts in one operation
 

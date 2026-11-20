@@ -23,7 +23,7 @@ WINDOWS = ('1h', '24h')
 
 
 class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Exactly two automatic count queries. No scheduled Loki queries by default."""
+    """Two automatic count queries plus one Alloy scrape-health query."""
 
     def __init__(self, hass: HomeAssistant, api: LokiClient, options: dict[str, Any],
                  alerts=None, prometheus: PrometheusClient | None = None) -> None:
@@ -43,6 +43,7 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         work = {
             'prometheus_1h': self.prometheus.async_counter_window('1h'),
             'prometheus_24h': self.prometheus.async_counter_window('24h'),
+            'alloy_scrapes': self.prometheus.async_alloy_scrapes(),
         }
         # User-authored LogQL is a deliberate opt-in, never a hidden background poll.
         for item in custom:
@@ -82,6 +83,8 @@ class LokiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         results: dict[str, Any] = {
             'fleet_summary': {}, 'monitor_summaries': {m['id']: {} for m in monitored},
             'prometheus_available': not any(f'prometheus_{w}' in failed for w in WINDOWS),
+            # None means the health query failed; {} means no targets exist.
+            'alloy_scrapes': values.get('alloy_scrapes'),
         }
         for window in WINDOWS:
             series = values.get(f'prometheus_{window}')
